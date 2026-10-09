@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../theme/atelier.dart';
+import '../theme/gem_styles.dart';
 
 /// Physical atelier widget library — velvet, walnut, brass and faceted
 /// gemstones, rendered natively in Flutter from the Stitch art direction
@@ -15,17 +16,17 @@ class VelvetBackdrop extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: RadialGradient(
-          center: Alignment(-0.45, -0.55),
+          center: const Alignment(-0.45, -0.55),
           radius: 1.35,
           colors: [
-            Color(0xFF6E2A38),
+            const Color(0xFF6E2A38),
             Atelier.velvet,
             Atelier.velvetDeep,
-            Color(0xFF220C13),
+            const Color(0xFF220C13),
           ],
-          stops: [0.0, 0.45, 0.78, 1.0],
+          stops: const [0.0, 0.45, 0.78, 1.0],
         ),
       ),
       child: CustomPaint(
@@ -72,16 +73,16 @@ class WalnutPanel extends StatelessWidget {
       padding: padding,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(radius),
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
             Atelier.walnutLight,
             Atelier.walnutMid,
             Atelier.walnutDark,
-            Color(0xFF1E1209),
+            const Color(0xFF1E1209),
           ],
-          stops: [0.0, 0.35, 0.75, 1.0],
+          stops: const [0.0, 0.35, 0.75, 1.0],
         ),
         border: Border.all(color: Atelier.brassDeep, width: 1.5),
         boxShadow: const [
@@ -164,7 +165,7 @@ class _BrassButtonState extends State<BrassButton> {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(10),
               gradient: widget.primary
-                  ? const LinearGradient(
+                  ? LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: [
@@ -172,12 +173,15 @@ class _BrassButtonState extends State<BrassButton> {
                         Atelier.brass,
                         Atelier.brassDeep
                       ],
-                      stops: [0.0, 0.55, 1.0],
+                      stops: const [0.0, 0.55, 1.0],
                     )
-                  : const LinearGradient(
+                  : LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: [Atelier.walnutMid, Color(0xFF241408)],
+                      colors: [
+                        Atelier.walnutMid,
+                        const Color(0xFF241408)
+                      ],
                     ),
               border: Border.all(
                 color: widget.primary
@@ -242,9 +246,9 @@ class _BrassButtonState extends State<BrassButton> {
                       height: 7,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        gradient: const RadialGradient(
+                        gradient: RadialGradient(
                           colors: [
-                            Color(0xFFF5D9A0),
+                            const Color(0xFFF5D9A0),
                             Atelier.brassDeep
                           ],
                         ),
@@ -304,15 +308,15 @@ class _BrassIconButtonState extends State<BrassIconButton> {
               height: widget.size,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                gradient: const RadialGradient(
-                  center: Alignment(-0.35, -0.35),
+                gradient: RadialGradient(
+                  center: const Alignment(-0.35, -0.35),
                   radius: 1.2,
                   colors: [
                     Atelier.brassBright,
                     Atelier.brass,
                     Atelier.brassDeep
                   ],
-                  stops: [0.0, 0.55, 1.0],
+                  stops: const [0.0, 0.55, 1.0],
                 ),
                 border:
                     Border.all(color: Atelier.walnutDark, width: 2),
@@ -381,12 +385,12 @@ class BrassToggle extends StatelessWidget {
         child: Container(
           width: 25,
           height: 25,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             shape: BoxShape.circle,
             gradient: RadialGradient(
-              center: Alignment(-0.3, -0.3),
+              center: const Alignment(-0.3, -0.3),
               colors: [
-                Color(0xFFF5D9A0),
+                const Color(0xFFF5D9A0),
                 Atelier.brass,
                 Atelier.brassDeep
               ],
@@ -438,7 +442,7 @@ class EngravedDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        const Expanded(
+        Expanded(
             child: Divider(color: Atelier.brassDeep, thickness: 1)),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -455,7 +459,7 @@ class EngravedDivider extends StatelessWidget {
             ),
           ),
         ),
-        const Expanded(
+        Expanded(
             child: Divider(color: Atelier.brassDeep, thickness: 1)),
       ],
     );
@@ -541,6 +545,7 @@ class GemStone extends StatelessWidget {
   final int special;
   final double size;
   final bool lifted;
+  final String styleId;
 
   const GemStone({
     super.key,
@@ -548,6 +553,7 @@ class GemStone extends StatelessWidget {
     this.special = 0,
     required this.size,
     this.lifted = false,
+    this.styleId = 'round_brilliant',
   });
 
   @override
@@ -560,6 +566,7 @@ class GemStone extends StatelessWidget {
           base: Atelier.gemBase[type.clamp(0, 5)],
           special: special,
           lifted: lifted,
+          styleId: styleId,
         ),
       ),
     );
@@ -573,33 +580,36 @@ class GemRenderer {
   GemRenderer._();
 
   static void paint(Canvas canvas, Offset c, double r, int type, int special,
-      {bool lifted = false, double scale = 1.0, double alpha = 1.0}) {
+      {bool lifted = false,
+      double scale = 1.0,
+      double alpha = 1.0,
+      String styleId = 'round_brilliant'}) {
     final base = Atelier.gemBase[type.clamp(0, 5)];
     canvas.save();
     canvas.translate(c.dx, c.dy);
     canvas.scale(scale, scale);
     if (alpha < 1.0) {
       canvas.translate(-c.dx, -c.dy);
-      _paintWithAlpha(canvas, c, r, base, special, lifted, alpha);
+      _paintWithAlpha(canvas, c, r, base, special, lifted, alpha, styleId);
       canvas.restore();
       return;
     }
     canvas.translate(-c.dx, -c.dy);
-    _paintBody(canvas, c, r, base, special, lifted);
+    _paintBody(canvas, c, r, base, special, lifted, styleId);
     canvas.restore();
   }
 
   static void _paintWithAlpha(Canvas canvas, Offset c, double r, Color base,
-      int special, bool lifted, double alpha) {
+      int special, bool lifted, double alpha, String styleId) {
     final layer = Paint()..color = Colors.white.withValues(alpha: alpha);
     canvas.saveLayer(
         Rect.fromCircle(center: c, radius: r * 1.4), layer);
-    _paintBody(canvas, c, r, base, special, lifted);
+    _paintBody(canvas, c, r, base, special, lifted, styleId);
     canvas.restore();
   }
 
   static void _paintBody(Canvas canvas, Offset c, double r, Color base,
-      int special, bool lifted) {
+      int special, bool lifted, String styleId) {
     if (special == 2) {
       _prismatic(canvas, c, r, lifted);
       return;
@@ -612,7 +622,7 @@ class GemRenderer {
       _brilliant(canvas, c, r, base, lifted);
       return;
     }
-    _cushion(canvas, c, r, base, lifted);
+    _cutStone(canvas, c, r, base, lifted, styleId);
   }
 
   static void _shadow(Canvas canvas, Offset c, double r, bool lifted) {
@@ -625,27 +635,25 @@ class GemRenderer {
     );
   }
 
-  /// Standard cushion-cut gem with facet planes.
-  static void _cushion(
-      Canvas canvas, Offset c, double r, Color col, bool lifted) {
+  /// Faceted gemstone in any jeweler's cut (see GemCuts). Facet planes fan
+  /// from the center to the outline polygon; the upper-left lamp lights
+  /// facets facing it.
+  static void _cutStone(Canvas canvas, Offset c, double r, Color col,
+      bool lifted, String styleId) {
     _shadow(canvas, c, r, lifted);
     final rad = lifted ? r * 0.96 : r * 0.88;
     final dark = Atelier.gemDark(col);
     final light = Atelier.gemLight(col);
 
-    // base cushion (octagon)
-    final pts = <Offset>[];
-    for (int i = 0; i < 8; i++) {
-      final a = pi / 8 + i * pi / 4;
-      pts.add(Offset(c.dx + cos(a) * rad, c.dy + sin(a) * rad));
-    }
+    final pts = GemCuts.outline(styleId, c, rad);
+    final n = pts.length;
     final basePath = Path()..addPolygon(pts, true);
     canvas.drawPath(basePath, Paint()..color = col);
 
     // facet planes: triangles from center, alternating light/dark by lamp
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < n; i++) {
       final p1 = pts[i];
-      final p2 = pts[(i + 1) % 8];
+      final p2 = pts[(i + 1) % n];
       final mid = Offset((p1.dx + p2.dx) / 2, (p1.dy + p2.dy) / 2);
       // lamp is upper-left: facets facing up-left are lighter
       final facing = (c.dx - mid.dx) + (c.dy - mid.dy);
@@ -664,7 +672,7 @@ class GemRenderer {
     final table = Path()
       ..addPolygon(
           [
-            for (int i = 0; i < 8; i++)
+            for (int i = 0; i < n; i++)
               Offset(c.dx + (pts[i].dx - c.dx) * 0.45,
                   c.dy + (pts[i].dy - c.dy) * 0.45)
           ],
@@ -824,8 +832,12 @@ class _GemPainter extends CustomPainter {
   final Color base;
   final int special;
   final bool lifted;
+  final String styleId;
   _GemPainter(
-      {required this.base, required this.special, required this.lifted});
+      {required this.base,
+      required this.special,
+      required this.lifted,
+      this.styleId = 'round_brilliant'});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -833,14 +845,15 @@ class _GemPainter extends CustomPainter {
     final type = Atelier.gemBase.indexOf(base);
     GemRenderer.paint(canvas, c, size.width / 2,
         type < 0 ? 0 : type, special,
-        lifted: lifted);
+        lifted: lifted, styleId: styleId);
   }
 
   @override
   bool shouldRepaint(covariant _GemPainter old) =>
       old.base != base ||
       old.special != special ||
-      old.lifted != lifted;
+      old.lifted != lifted ||
+      old.styleId != styleId;
 }
 
 /// Brass name plaque: engraved title on brass.
@@ -861,7 +874,7 @@ class BrassPlaque extends StatelessWidget {
           const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(8),
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
@@ -869,7 +882,7 @@ class BrassPlaque extends StatelessWidget {
             Atelier.brass,
             Atelier.brassDeep
           ],
-          stops: [0.0, 0.55, 1.0],
+          stops: const [0.0, 0.55, 1.0],
         ),
         border: Border.all(color: Atelier.walnutDark, width: 2),
         boxShadow: const [
@@ -893,11 +906,14 @@ class BrassPlaque extends StatelessWidget {
 class MovesDial extends StatelessWidget {
   final int moves;
   final double size;
-  const MovesDial({super.key, required this.moves, this.size = 64});
+  final String caption;
+  const MovesDial(
+      {super.key, required this.moves, this.size = 64, this.caption = 'MOVES'});
 
   @override
   Widget build(BuildContext context) {
-    final low = moves <= 5;
+    final limitless = moves < 0;
+    final low = !limitless && moves <= 5;
     return SizedBox(
       width: size,
       height: size + 14,
@@ -908,14 +924,14 @@ class MovesDial extends StatelessWidget {
             height: size,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              gradient: const RadialGradient(
-                center: Alignment(-0.3, -0.3),
+              gradient: RadialGradient(
+                center: const Alignment(-0.3, -0.3),
                 colors: [
                   Atelier.brassBright,
                   Atelier.brass,
                   Atelier.brassDeep
                 ],
-                stops: [0.0, 0.55, 1.0],
+                stops: const [0.0, 0.55, 1.0],
               ),
               border: Border.all(color: Atelier.walnutDark, width: 2.5),
               boxShadow: const [
@@ -927,14 +943,14 @@ class MovesDial extends StatelessWidget {
             ),
             child: Center(
               child: Text(
-                '$moves',
+                limitless ? '\u221e' : '$moves',
                 style: Atelier.numeralOnBrass
                     .copyWith(fontSize: size * 0.42),
               ),
             ),
           ),
           const SizedBox(height: 2),
-          Text('MOVES',
+          Text(caption,
               style: Atelier.caption.copyWith(
                   fontSize: 10,
                   color: low ? Atelier.coinGold : Atelier.creamDim)),
@@ -948,17 +964,19 @@ class MovesDial extends StatelessWidget {
 class ScorePlate extends StatelessWidget {
   final int score;
   final int target;
-  const ScorePlate({super.key, required this.score, required this.target});
+  final String? goalLabel; // shown instead of "GOAL x" when provided
+  const ScorePlate(
+      {super.key, required this.score, required this.target, this.goalLabel});
 
   @override
   Widget build(BuildContext context) {
-    final p = (score / target).clamp(0.0, 1.0);
+    final p = target > 0 ? (score / target).clamp(0.0, 1.0) : 0.0;
     return Container(
       padding:
           const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
@@ -966,7 +984,7 @@ class ScorePlate extends StatelessWidget {
             Atelier.brass,
             Atelier.brassDeep
           ],
-          stops: [0.0, 0.55, 1.0],
+          stops: const [0.0, 0.55, 1.0],
         ),
         border: Border.all(color: Atelier.walnutDark, width: 2),
         boxShadow: const [
@@ -997,7 +1015,7 @@ class ScorePlate extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 2),
-          Text('GOAL ${_fmt(target)}',
+          Text(goalLabel ?? 'GOAL ${_fmt(target)}',
               style: Atelier.caption.copyWith(
                   color: Atelier.walnutDark, fontSize: 10)),
         ],

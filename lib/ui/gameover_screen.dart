@@ -3,11 +3,13 @@ import '../theme/atelier.dart';
 import '../state/settings.dart';
 import '../audio/sound_engine.dart';
 import '../engine/game.dart';
+import '../services/iap_service.dart';
 import 'widgets.dart';
 import 'board_screen.dart';
 
 /// Result payload passed from the board screen.
 class LevelResult {
+  final GameMode mode;
   final int level;
   final bool won;
   final int score;
@@ -18,7 +20,9 @@ class LevelResult {
   final int bestCombo;
   final LevelQuota? quota;
   final int quotaCollected;
+  final bool isNewBest;
   const LevelResult({
+    this.mode = GameMode.levels,
     required this.level,
     required this.won,
     required this.score,
@@ -29,20 +33,24 @@ class LevelResult {
     required this.bestCombo,
     required this.quota,
     required this.quotaCollected,
+    this.isNewBest = false,
   });
 }
 
 /// Victory / game over — Stitch screen 3: an open walnut jewelry box with
 /// velvet interior, brass star medals, diamond centerpiece, score tablet,
 /// coin inset; Replay / Next Atelier / Menu. Defeat: "Atelier Closed".
+/// Timed mode: "Time's Up". Endless: "Bench Rested".
 class GameOverScreen extends StatefulWidget {
   final AtelierSettings settings;
   final SoundEngine sound;
+  final StoreService store;
   final LevelResult result;
   const GameOverScreen({
     super.key,
     required this.settings,
     required this.sound,
+    required this.store,
     required this.result,
   });
 
@@ -68,9 +76,9 @@ class _GameOverScreenState extends State<GameOverScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
-      widget.sound.stopMusic();
+      widget.sound.onAppBackground();
     } else if (state == AppLifecycleState.resumed) {
-      widget.sound.startMenuMusic();
+      widget.sound.onAppForeground();
     }
   }
 
@@ -82,7 +90,40 @@ class _GameOverScreenState extends State<GameOverScreen>
         builder: (_) => BoardScreen(
           settings: widget.settings,
           sound: widget.sound,
+          store: widget.store,
+          mode: GameMode.levels,
           level: level,
+        ),
+      ),
+    );
+  }
+
+  void _openEndless() {
+    widget.sound.play(SfxKind.click);
+    widget.sound.startGameMusic();
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => BoardScreen(
+          settings: widget.settings,
+          sound: widget.sound,
+          store: widget.store,
+          mode: GameMode.endless,
+        ),
+      ),
+    );
+  }
+
+  void _openTimed() {
+    widget.sound.play(SfxKind.click);
+    widget.sound.startGameMusic();
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => BoardScreen(
+          settings: widget.settings,
+          sound: widget.sound,
+          store: widget.store,
+          mode: GameMode.timed,
+          timedSeconds: 120,
         ),
       ),
     );
@@ -93,12 +134,25 @@ class _GameOverScreenState extends State<GameOverScreen>
     Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
+  String get _title {
+    final r = widget.result;
+    switch (r.mode) {
+      case GameMode.timed:
+        return 'TIME\u2019S UP';
+      case GameMode.endless:
+        return 'BENCH RESTED';
+      case GameMode.levels:
+        return r.won ? 'ATELIER COMPLETE' : 'ATELIER CLOSED';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final r = widget.result;
-    final isBest =
-        (widget.settings.bestScores[r.level] ?? 0) == r.score &&
-            r.score > 0;
+    final s = widget.settings;
+    final isBest = r.mode == GameMode.levels
+        ? (s.bestScores[r.level] ?? 0) == r.score && r.score > 0
+        : r.isNewBest;
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: VelvetBackdrop(
@@ -111,9 +165,7 @@ class _GameOverScreenState extends State<GameOverScreen>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   BrassPlaque(
-                    text: r.won
-                        ? 'ATELIER COMPLETE'
-                        : 'ATELIER CLOSED',
+                    text: _title,
                     fontSize: 24,
                     letterSpacing: 3,
                   ),
@@ -123,30 +175,47 @@ class _GameOverScreenState extends State<GameOverScreen>
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (r.won) ...[
+                        if (r.won || r.mode != GameMode.levels) ...[
                           // diamond centerpiece
-                          GemStone(type: 5, special: 2, size: 64),
+                          GemStone(
+                              type: 5,
+                              special: 2,
+                              size: 64,
+                              styleId: s.gemStyleId),
                           const SizedBox(height: 8),
-                          Row(
-                            mainAxisAlignment:
-                                MainAxisAlignment.center,
-                            children: [
-                              for (int i = 0; i < 3; i++)
-                                Padding(
-                                  padding:
-                                      const EdgeInsets.symmetric(
-                                          horizontal: 6),
-                                  child: StarMedal(
-                                      earned: i < r.stars,
-                                      size: 52),
-                                ),
-                            ],
-                          ),
+                          if (r.mode == GameMode.levels)
+                            Row(
+                              mainAxisAlignment:
+                                  MainAxisAlignment.center,
+                              children: [
+                                for (int i = 0; i < 3; i++)
+                                  Padding(
+                                    padding:
+                                        const EdgeInsets.symmetric(
+                                            horizontal: 6),
+                                    child: StarMedal(
+                                        earned: i < r.stars,
+                                        size: 52),
+                                  ),
+                              ],
+                            )
+                          else
+                            Text(
+                              r.mode == GameMode.timed
+                                  ? 'Two minutes of fire \u2014 well cut, ${s.profileName}.'
+                                  : 'The bench is yours whenever, ${s.profileName}.',
+                              textAlign: TextAlign.center,
+                              style: Atelier.bodyItalic.copyWith(
+                                  color: Atelier.creamDim),
+                            ),
                         ] else ...[
-                          GemStone(type: 0, size: 56),
+                          GemStone(
+                              type: 0,
+                              size: 56,
+                              styleId: s.gemStyleId),
                           const SizedBox(height: 8),
                           Text(
-                            'The target slipped away.\nThe bench is still warm — try again.',
+                            'The target slipped away.\nThe bench is still warm \u2014 try again.',
                             textAlign: TextAlign.center,
                             style: Atelier.bodyItalic.copyWith(
                                 color: Atelier.creamDim),
@@ -156,14 +225,21 @@ class _GameOverScreenState extends State<GameOverScreen>
                         const EngravedDivider(),
                         const SizedBox(height: 10),
                         // score tablet
-                        Text('FINAL SCORE',
+                        Text(
+                            r.mode == GameMode.levels
+                                ? 'FINAL SCORE'
+                                : 'SESSION SCORE',
                             style: Atelier.caption),
                         Text(_fmt(r.score),
                             style: Atelier.numeral.copyWith(
                                 fontSize: 34,
                                 color: Atelier.brassBright)),
                         Text(
-                            'Target ${_fmt(r.target)}${isBest ? '  ·  BEST' : ''}',
+                            r.mode == GameMode.levels
+                                ? 'Target ${_fmt(r.target)}${isBest ? '  \u00b7  BEST' : ''}'
+                                : isBest
+                                    ? 'NEW BEST \u2726'
+                                    : 'Best ${_fmt(r.mode == GameMode.timed ? s.timedBest : s.endlessBest)}',
                             style: Atelier.caption),
                         const SizedBox(height: 10),
                         Wrap(
@@ -178,7 +254,7 @@ class _GameOverScreenState extends State<GameOverScreen>
                             _chip(Icons.monetization_on,
                                 '+${r.coins} coins'),
                             _chip(Icons.bolt,
-                                'Best cascade ×${r.bestCombo}'),
+                                'Best cascade \u00d7${r.bestCombo}'),
                             if (r.quota != null)
                               _chip(Icons.diamond,
                                   '${Atelier.gemNames[r.quota!.tier]} ${r.quotaCollected}/${r.quota!.count}'),
@@ -188,18 +264,18 @@ class _GameOverScreenState extends State<GameOverScreen>
                     ),
                   ),
                   const SizedBox(height: 18),
-                  if (r.won)
+                  if (r.mode == GameMode.levels && r.won)
                     SizedBox(
                       width: double.infinity,
                       child: BrassButton(
                         label:
-                            'NEXT ATELIER · ${r.level + 1}',
+                            'NEXT ATELIER \u00b7 ${r.level + 1}',
                         sublabel:
                             'Target ${_fmt(LevelConfig.targetFor(r.level + 1))} pts',
                         onTap: () => _openLevel(r.level + 1),
                       ),
                     )
-                  else
+                  else if (r.mode == GameMode.levels)
                     SizedBox(
                       width: double.infinity,
                       child: BrassButton(
@@ -207,6 +283,22 @@ class _GameOverScreenState extends State<GameOverScreen>
                         sublabel:
                             'Atelier ${r.level} awaits',
                         onTap: () => _openLevel(r.level),
+                      ),
+                    )
+                  else if (r.mode == GameMode.timed)
+                    SizedBox(
+                      width: double.infinity,
+                      child: BrassButton(
+                        label: 'ANOTHER 2 MINUTES',
+                        onTap: _openTimed,
+                      ),
+                    )
+                  else
+                    SizedBox(
+                      width: double.infinity,
+                      child: BrassButton(
+                        label: 'BACK TO THE BENCH',
+                        onTap: _openEndless,
                       ),
                     ),
                   const SizedBox(height: 10),
@@ -217,7 +309,19 @@ class _GameOverScreenState extends State<GameOverScreen>
                           label: 'REPLAY',
                           primary: false,
                           fontSize: 16,
-                          onTap: () => _openLevel(r.level),
+                          onTap: () {
+                            switch (r.mode) {
+                              case GameMode.levels:
+                                _openLevel(r.level);
+                                break;
+                              case GameMode.timed:
+                                _openTimed();
+                                break;
+                              case GameMode.endless:
+                                _openEndless();
+                                break;
+                            }
+                          },
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -273,7 +377,7 @@ class _GameOverScreenState extends State<GameOverScreen>
   }
 }
 
-/// Open walnut jewelry box with a burgundy velvet interior.
+/// Open walnut jewelry box with a velvet interior.
 class _JewelryBox extends StatelessWidget {
   final Widget child;
   const _JewelryBox({required this.child});
@@ -284,7 +388,7 @@ class _JewelryBox extends StatelessWidget {
       padding: const EdgeInsets.all(7),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
@@ -305,13 +409,13 @@ class _JewelryBox extends StatelessWidget {
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
-          gradient: const RadialGradient(
-            center: Alignment(-0.4, -0.5),
+          gradient: RadialGradient(
+            center: const Alignment(-0.4, -0.5),
             radius: 1.2,
             colors: [
               Atelier.velvet,
               Atelier.velvetDeep,
-              Color(0xFF220C13),
+              const Color(0xFF220C13),
             ],
           ),
           border:

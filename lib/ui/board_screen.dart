@@ -6,6 +6,7 @@ import '../theme/atelier.dart';
 import '../state/settings.dart';
 import '../audio/sound_engine.dart';
 import '../engine/game.dart';
+import '../services/iap_service.dart';
 import 'widgets.dart';
 import 'gameover_screen.dart';
 import 'settings_screen.dart';
@@ -13,16 +14,26 @@ import 'settings_screen.dart';
 /// Gameplay — Stitch screen 2: top bar (atelier plaque, moves dial,
 /// goal plaque, pause), 8×8 recessed velvet cells with faceted gems,
 /// brass score plate + progress, quota insets, apprentice hint loupe.
+///
+/// Modes: [GameMode.levels] (target + move limit + quotas),
+/// [GameMode.endless] (no clock, no limit — chase the best score),
+/// [GameMode.timed] (2-minute clock, unlimited moves).
 class BoardScreen extends StatefulWidget {
   final AtelierSettings settings;
   final SoundEngine sound;
+  final StoreService store;
+  final GameMode mode;
   final int level;
+  final int timedSeconds;
   final bool restore;
   const BoardScreen({
     super.key,
     required this.settings,
     required this.sound,
-    required this.level,
+    required this.store,
+    this.mode = GameMode.levels,
+    this.level = 1,
+    this.timedSeconds = 120,
     this.restore = false,
   });
 
@@ -34,11 +45,16 @@ class _BoardScreenState extends State<BoardScreen>
     with WidgetsBindingObserver {
   late final JewelEngine _engine;
   bool _pausedUi = false;
+  bool _autoPaused = false;
   String _banner = '';
   int _bannerId = 0;
   List<int>? _hint;
   Timer? _hintTimer;
   bool _navigated = false;
+  bool _warned30 = false;
+  bool _warned10 = false;
+
+  GameMode get _mode => widget.mode;
 
   @override
   void initState() {
@@ -46,7 +62,7 @@ class _BoardScreenState extends State<BoardScreen>
     WidgetsBinding.instance.addObserver(this);
     _engine = JewelEngine();
     _engine.addListener(_onEngine);
-    if (widget.restore) {
+    if (widget.restore && _mode == GameMode.levels) {
       MidGameSave.load().then((data) {
         if (!mounted) return;
         if (data != null && _engine.restore(data)) {
@@ -57,7 +73,17 @@ class _BoardScreenState extends State<BoardScreen>
         widget.sound.play(SfxKind.start);
       });
     } else {
-      _engine.startLevel(widget.level);
+      switch (_mode) {
+        case GameMode.levels:
+          _engine.startLevel(widget.level);
+          break;
+        case GameMode.endless:
+          _engine.startEndless();
+          break;
+        case GameMode.timed:
+          _engine.startTimed(widget.timedSeconds);
+          break;
+      }
       MidGameSave.clear();
       widget.sound.play(SfxKind.start);
     }
@@ -75,12 +101,21 @@ class _BoardScreenState extends State<BoardScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
-      widget.sound.stopMusic();
-      if (!_engine.over) {
-        MidGameSave.save(_engine.toJson()); // RULES.md §12
+      widget.sound.onAppBackground();
+      if (!_engine.over && !_engine.paused) {
+        // RULES.md §12: backgrounding freezes the board mid-cascade.
+        _autoPaused = true;
+        _engine.setPaused(true);
+      }
+      if (_mode == GameMode.levels && !_engine.over) {
+        MidGameSave.save(_engine.toJson());
       }
     } else if (state == AppLifecycleState.resumed) {
-      widget.sound.startGameMusic();
+      widget.sound.onAppForeground();
+      if (_autoPaused && !_pausedUi) {
+        _autoPaused = false;
+        _engine.setPaused(false);
+      }
     }
   }
 
@@ -88,6 +123,20 @@ class _BoardScreenState extends State<BoardScreen>
     if (_navigated) return;
     for (final e in _engine.takeEvents()) {
       _handleEvent(e);
+    }
+    // Timed-mode clock warnings.
+    if (_mode == GameMode.timed && !_engine.over) {
+      final left = _engine.timeLeftMs;
+      if (!_warned30 && left <= 30000 && left > 0) {
+        _warned30 = true;
+        _showBanner('30 seconds left \u2014 make them count!');
+        widget.sound.play(SfxKind.hint);
+      }
+      if (!_warned10 && left <= 10000 && left > 0) {
+        _warned10 = true;
+        _showBanner('10 seconds!');
+        widget.sound.play(SfxKind.hint);
+      }
     }
     if (mounted) setState(() {});
   }
@@ -107,11 +156,14 @@ class _BoardScreenState extends State<BoardScreen>
         break;
       case EngineEventKind.invalid:
         sound.play(SfxKind.invalid);
-        _showBanner('No match — the gems settle back');
+        _showBanner('No match \u2014 the gems settle back');
         break;
       case EngineEventKind.match:
         sound.playMatch(e.step, e.gems);
-        if (e.step > 1) _showBanner('CASCADE ×${min(e.step, 8)}!');
+        if (e.step > 1) {
+          _showBanner(
+              'CASCADE \u00d7${min(e.step, 8)}!  ${widget.settings.profileName} is on fire');
+        }
         break;
       case EngineEventKind.specialCreated:
         sound.play(SfxKind.specialCreate);
@@ -138,13 +190,19 @@ class _BoardScreenState extends State<BoardScreen>
         sound.play(SfxKind.coin);
         break;
       case EngineEventKind.moveDone:
-        MidGameSave.save(_engine.toJson()); // RULES.md §12
+        if (_mode == GameMode.levels) {
+          MidGameSave.save(_engine.toJson()); // RULES.md §12
+        }
         break;
       case EngineEventKind.win:
         await _onWin(int.parse(e.text), e.gems);
         break;
       case EngineEventKind.lose:
-        await _onLose(int.parse(e.text));
+        if (_mode == GameMode.timed) {
+          await _onTimedEnd(int.parse(e.text));
+        } else {
+          await _onLose(int.parse(e.text));
+        }
         break;
       case EngineEventKind.notice:
         _showBanner(e.text);
@@ -155,7 +213,7 @@ class _BoardScreenState extends State<BoardScreen>
   void _showBanner(String text) {
     final id = ++_bannerId;
     setState(() => _banner = text);
-    Future.delayed(const Duration(milliseconds: 1400), () {
+    Future.delayed(const Duration(milliseconds: 1600), () {
       if (mounted && _bannerId == id) setState(() => _banner = '');
     });
   }
@@ -173,7 +231,9 @@ class _BoardScreenState extends State<BoardScreen>
         builder: (_) => GameOverScreen(
           settings: widget.settings,
           sound: widget.sound,
+          store: widget.store,
           result: LevelResult(
+            mode: GameMode.levels,
             level: _engine.level,
             won: true,
             score: _engine.score,
@@ -201,7 +261,9 @@ class _BoardScreenState extends State<BoardScreen>
         builder: (_) => GameOverScreen(
           settings: widget.settings,
           sound: widget.sound,
+          store: widget.store,
           result: LevelResult(
+            mode: GameMode.levels,
             level: _engine.level,
             won: false,
             score: _engine.score,
@@ -218,10 +280,79 @@ class _BoardScreenState extends State<BoardScreen>
     );
   }
 
+  /// Timed session over: bank the score, crown a new best.
+  Future<void> _onTimedEnd(int coins) async {
+    _navigated = true;
+    final isBest =
+        await widget.settings.recordTimedScore(_engine.score);
+    if (coins > 0) await widget.settings.earnCoins(coins);
+    await widget.sound.play(isBest ? SfxKind.win : SfxKind.lose);
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => GameOverScreen(
+          settings: widget.settings,
+          sound: widget.sound,
+          store: widget.store,
+          result: LevelResult(
+            mode: GameMode.timed,
+            level: 0,
+            won: true,
+            score: _engine.score,
+            target: 0,
+            stars: 0,
+            coins: coins,
+            polishingBonus: 0,
+            bestCombo: _engine.bestCombo,
+            quota: null,
+            quotaCollected: 0,
+            isNewBest: isBest,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Endless session ended by the player: bank the score, then the summary.
+  Future<void> _endEndlessSession() async {
+    if (_navigated) return;
+    _navigated = true;
+    final isBest =
+        await widget.settings.recordEndlessScore(_engine.score);
+    final coins = _engine.score ~/ 1000;
+    if (coins > 0) await widget.settings.earnCoins(coins);
+    await widget.sound.play(SfxKind.win);
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => GameOverScreen(
+          settings: widget.settings,
+          sound: widget.sound,
+          store: widget.store,
+          result: LevelResult(
+            mode: GameMode.endless,
+            level: 0,
+            won: true,
+            score: _engine.score,
+            target: 0,
+            stars: 0,
+            coins: coins,
+            polishingBonus: 0,
+            bestCombo: _engine.bestCombo,
+            quota: null,
+            quotaCollected: 0,
+            isNewBest: isBest,
+          ),
+        ),
+      ),
+    );
+  }
+
   void _togglePause() {
     widget.sound.play(SfxKind.click);
     setState(() {
       _pausedUi = !_pausedUi;
+      _autoPaused = false;
       _engine.setPaused(_pausedUi);
     });
   }
@@ -230,6 +361,7 @@ class _BoardScreenState extends State<BoardScreen>
     widget.sound.play(SfxKind.click);
     setState(() {
       _pausedUi = false;
+      _autoPaused = false;
       _engine.setPaused(false);
     });
   }
@@ -238,8 +370,11 @@ class _BoardScreenState extends State<BoardScreen>
     widget.sound.play(SfxKind.start);
     setState(() {
       _pausedUi = false;
+      _autoPaused = false;
       _engine.setPaused(false);
       _hint = null;
+      _warned30 = false;
+      _warned10 = false;
     });
     _engine.restart();
     MidGameSave.clear();
@@ -247,6 +382,18 @@ class _BoardScreenState extends State<BoardScreen>
 
   void _quitToMenu() {
     widget.sound.play(SfxKind.click);
+    if (_mode == GameMode.endless && !_engine.over) {
+      _endEndlessSession();
+      return;
+    }
+    if (_mode == GameMode.timed && !_engine.over) {
+      // Leaving early: bank what was earned, no summary screen.
+      widget.settings.recordTimedScore(_engine.score);
+      final coins = _engine.score ~/ 1000;
+      if (coins > 0) widget.settings.earnCoins(coins);
+      Navigator.of(context).pop();
+      return;
+    }
     if (!_engine.over) {
       MidGameSave.save(_engine.toJson());
     }
@@ -255,7 +402,8 @@ class _BoardScreenState extends State<BoardScreen>
 
   Future<void> _useHint() async {
     if (_engine.busy || _engine.over || _engine.paused) return;
-    final free = _engine.hintsUsed < 3;
+    final pro = widget.settings.proUnlocked;
+    final free = pro || _engine.hintsUsed < 3;
     if (!free) {
       final ok = await widget.settings.spendCoins(5);
       if (!ok) {
@@ -266,7 +414,7 @@ class _BoardScreenState extends State<BoardScreen>
     }
     final hint = _engine.computeHint();
     if (hint == null) {
-      _showBanner('No move found — reshuffling soon');
+      _showBanner('No move found \u2014 reshuffling soon');
       return;
     }
     _engine.markHintUsed();
@@ -278,9 +426,21 @@ class _BoardScreenState extends State<BoardScreen>
     });
   }
 
+  String get _title {
+    switch (_mode) {
+      case GameMode.levels:
+        return 'ATELIER ${_engine.level}';
+      case GameMode.endless:
+        return 'ENDLESS BENCH';
+      case GameMode.timed:
+        return 'TIMED BENCH';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final e = _engine;
+    final s = widget.settings;
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: VelvetBackdrop(
@@ -302,13 +462,22 @@ class _BoardScreenState extends State<BoardScreen>
                         const SizedBox(width: 8),
                         Expanded(
                           child: BrassPlaque(
-                            text: 'ATELIER ${e.level}',
+                            text: _title,
                             fontSize: 17,
                             letterSpacing: 2,
                           ),
                         ),
                         const SizedBox(width: 8),
-                        MovesDial(moves: e.movesLeft, size: 56),
+                        if (_mode == GameMode.timed)
+                          _ClockPlate(ms: e.timeLeftMs)
+                        else
+                          MovesDial(
+                            moves: e.movesLeft,
+                            size: 56,
+                            caption: _mode == GameMode.endless
+                                ? 'ENDLESS'
+                                : 'MOVES',
+                          ),
                         const SizedBox(width: 8),
                         BrassIconButton(
                           icon: _pausedUi
@@ -327,7 +496,16 @@ class _BoardScreenState extends State<BoardScreen>
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        ScorePlate(score: e.score, target: e.target),
+                        if (_mode == GameMode.levels)
+                          ScorePlate(
+                              score: e.score, target: e.target)
+                        else
+                          ScorePlate(
+                            score: e.score,
+                            target: 0,
+                            goalLabel:
+                                'BEST ${_fmt(_mode == GameMode.timed ? s.timedBest : s.endlessBest)}',
+                          ),
                         if (e.quota != null) ...[
                           const SizedBox(width: 10),
                           QuotaInset(
@@ -364,6 +542,7 @@ class _BoardScreenState extends State<BoardScreen>
                           child: _GemBoard(
                             engine: e,
                             hint: _hint,
+                            gemStyleId: s.gemStyleId,
                             onTap: (r, c) => e.tapCell(r, c),
                             onFlick: (r, c, dr, dc) =>
                                 e.flick(r, c, dr, dc),
@@ -383,25 +562,26 @@ class _BoardScreenState extends State<BoardScreen>
                         BrassIconButton(
                           icon: Icons.search,
                           size: 46,
-                          badge: e.hintsUsed < 3
+                          badge: (s.proUnlocked ||
+                                  e.hintsUsed < 3)
                               ? 'FREE'
                               : '5c',
                           onTap: _useHint,
                         ),
                         Text(
-                          'Best cascade ×${e.bestCombo}',
+                          'Best cascade \u00d7${e.bestCombo}',
                           style: Atelier.caption,
                         ),
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.monetization_on,
+                            Icon(Icons.monetization_on,
                                 color: Atelier.coinGold, size: 18),
                             const SizedBox(width: 4),
                             AnimatedBuilder(
-                              animation: widget.settings,
+                              animation: s,
                               builder: (_, _) => Text(
-                                  '${widget.settings.coins}',
+                                  '${s.coins}',
                                   style: Atelier.numeral
                                       .copyWith(fontSize: 15)),
                             ),
@@ -473,7 +653,9 @@ class _BoardScreenState extends State<BoardScreen>
                             SizedBox(
                               width: 240,
                               child: BrassButton(
-                                  label: 'LEAVE BENCH',
+                                  label: _mode == GameMode.levels
+                                      ? 'LEAVE BENCH'
+                                      : 'END SESSION',
                                   primary: false,
                                   fontSize: 16,
                                   onTap: _quitToMenu),
@@ -490,6 +672,61 @@ class _BoardScreenState extends State<BoardScreen>
       ),
     );
   }
+
+  static String _fmt(int n) {
+    final s = n.toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+    }
+    return buf.toString();
+  }
+}
+
+/// Brass clock pill for timed mode.
+class _ClockPlate extends StatelessWidget {
+  final int ms;
+  const _ClockPlate({required this.ms});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = (ms / 1000).ceil();
+    final low = s <= 30;
+    final text =
+        '${(s ~/ 60).toString().padLeft(1, '0')}:${(s % 60).toString().padLeft(2, '0')}';
+    return Container(
+      padding:
+          const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Atelier.brassBright,
+            Atelier.brass,
+            Atelier.brassDeep
+          ],
+        ),
+        border: Border.all(color: Atelier.walnutDark, width: 2),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(text,
+              style: Atelier.numeralOnBrass
+                  .copyWith(fontSize: 22)),
+          Text('LEFT',
+              style: Atelier.caption.copyWith(
+                  fontSize: 9,
+                  color: low
+                      ? Atelier.resetRed
+                      : Atelier.walnutDark)),
+        ],
+      ),
+    );
+  }
 }
 
 /// Animated 8×8 board: recessed velvet cells, faceted gems, swap/clear/fall
@@ -497,11 +734,13 @@ class _BoardScreenState extends State<BoardScreen>
 class _GemBoard extends StatefulWidget {
   final JewelEngine engine;
   final List<int>? hint;
+  final String gemStyleId;
   final void Function(int r, int c) onTap;
   final void Function(int r, int c, int dr, int dc) onFlick;
   const _GemBoard({
     required this.engine,
     required this.hint,
+    required this.gemStyleId,
     required this.onTap,
     required this.onFlick,
   });
@@ -538,7 +777,8 @@ class _GemBoardState extends State<_GemBoard>
     final active = e.swapAnim != null ||
         e.clearAnim != null ||
         e.fallAnim != null ||
-        e.spawnCell != null;
+        e.spawnCell != null ||
+        e.blastAnim != null;
     if (active && !_ticker.isActive) {
       _ticker.start();
     } else if (!active && _ticker.isActive) {
@@ -596,7 +836,9 @@ class _GemBoardState extends State<_GemBoard>
             onPanEnd: (_) => _panR = -1,
             child: CustomPaint(
               painter: _BoardPainter(
-                  engine: widget.engine, hint: widget.hint),
+                  engine: widget.engine,
+                  hint: widget.hint,
+                  gemStyleId: widget.gemStyleId),
             ),
           ),
         );
@@ -608,13 +850,18 @@ class _GemBoardState extends State<_GemBoard>
 class _BoardPainter extends CustomPainter {
   final JewelEngine engine;
   final List<int>? hint;
-  _BoardPainter({required this.engine, required this.hint});
+  final String gemStyleId;
+  _BoardPainter(
+      {required this.engine,
+      required this.hint,
+      required this.gemStyleId});
 
   static const _swapDur = 170000; // microseconds
   static const _bounceDur = 300000;
   static const _clearDur = 200000;
   static const _fallDur = 240000;
   static const _spawnDur = 260000;
+  static const _blastDur = 550000;
 
   double _progress(int t0, int dur) {
     final now = DateTime.now().microsecondsSinceEpoch;
@@ -630,7 +877,7 @@ class _BoardPainter extends CustomPainter {
     final cell = size.width / kBoardN;
     final e = engine;
 
-    // Tray: walnut rim + navy velvet bed.
+    // Tray: walnut rim + velvet bed (theme-driven).
     canvas.drawRRect(
       RRect.fromRectAndRadius(
           Rect.fromLTWH(0, 0, size.width, size.height),
@@ -742,7 +989,8 @@ class _BoardPainter extends CustomPainter {
             canvas, center, cell * 0.44, g.type, g.special,
             lifted: lifted && clearT >= 1.0,
             scale: gemScale,
-            alpha: alpha);
+            alpha: alpha,
+            styleId: gemStyleId);
 
         // hint ring
         if (_inHint(r, c)) {
@@ -763,6 +1011,38 @@ class _BoardPainter extends CustomPainter {
                 ..style = PaintingStyle.stroke
                 ..strokeWidth = 2.5);
         }
+      }
+    }
+
+    // detonation shockwave: expanding brass rings + warm flash
+    final blast = e.blastAnim;
+    if (blast != null) {
+      final bt = _progress(blast.t0, _blastDur);
+      if (bt < 1.0) {
+        final bc = Offset(
+            (blast.c + 0.5) * cell, (blast.r + 0.5) * cell);
+        final fade = 1.0 - bt;
+        final rr = cell * 3.4 * _easeOut(bt);
+        canvas.drawCircle(
+            bc,
+            rr * 0.75,
+            Paint()
+              ..color = Colors.white.withValues(alpha: 0.30 * fade));
+        canvas.drawCircle(
+            bc,
+            rr,
+            Paint()
+              ..color =
+                  Atelier.brassBright.withValues(alpha: 0.85 * fade)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1 + 6 * fade);
+        canvas.drawCircle(
+            bc,
+            rr * 0.62,
+            Paint()
+              ..color = Atelier.brass.withValues(alpha: 0.7 * fade)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1 + 3 * fade);
       }
     }
   }

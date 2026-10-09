@@ -235,4 +235,179 @@ void main() {
     expect(e2.movesLeft, 17);
     expect(e2.quota, isNotNull);
   });
+
+  test('watchdog: recovers a stalled busy lock (no stuck states)', () {
+    final e = JewelEngine();
+    e.startLevel(1);
+    // Simulate a dead await chain: busy with no heartbeat for 9s.
+    e.busy = true;
+    e.debugAgeStamp(9000);
+    e.debugWatchdogTick();
+    expect(e.busy, isFalse,
+        reason: 'watchdog must release a stalled busy lock');
+    e.dispose();
+  });
+
+  test('watchdog: leaves a progressing resolution alone', () async {
+    final e = JewelEngine();
+    e.startLevel(1);
+    fillSafe(e);
+    e.board[2][0] = Gem(0);
+    e.board[1][1] = Gem(0);
+    // Start a swap (busy), tick the watchdog mid-flight: fresh heartbeat
+    // means no recovery.
+    final f = e.trySwap(1, 0, 1, 1);
+    e.debugWatchdogTick();
+    expect(e.busy, isTrue);
+    await f;
+    expect(e.busy, isFalse);
+    e.dispose();
+  });
+
+  test('RULES 6: cascade multiplier x2 on the refill cascade', () async {
+    final e = JewelEngine();
+    e.startLevel(1);
+    fillSafe(e);
+    // Seeded refill RNG for level 1, first move: seed = 100003 + 1.
+    // Column 0 refills rows 2,1,0 with the first three draws.
+    final rng = XorShift32(100003 + 1);
+    int wtype() {
+      final v = rng.next() % 11;
+      return v == 10 ? 5 : v ~/ 2;
+    }
+
+    final t1 = wtype();
+    wtype(); // row-1 refill type (documented draw order)
+    wtype(); // row-0 refill type (documented draw order)
+    // Rows 0,1 will fall to rows 3,4; refill row 2 = t1 → vertical 3.
+    e.board[0][0] = Gem(t1);
+    e.board[1][0] = Gem(t1);
+    // Swap completes a vertical 3 of type 1 at rows 5,6,7 col 0.
+    e.board[5][0] = Gem(1);
+    e.board[6][0] = Gem(1);
+    e.board[7][0] = Gem(2);
+    e.board[7][1] = Gem(1);
+    e.movesLeft = 30;
+    e.score = 0;
+    await e.trySwap(7, 0, 7, 1);
+    // Step 1: 3x60x1 = 180; cascade step 2: 3x60x2 = 360 → ≥ 540 total.
+    expect(e.score >= 540, isTrue,
+        reason: 'cascade x2 expected, score=${e.score}');
+    expect(e.bestCombo >= 2, isTrue,
+        reason: 'bestCombo should record the cascade');
+    e.dispose();
+  });
+
+  test('RULES 7/12: prismatic + prismatic clears the whole tray',
+      () async {
+    final e = JewelEngine();
+    e.startLevel(1);
+    fillSafe(e);
+    e.board[3][3] = Gem(0, 2);
+    e.board[3][4] = Gem(1, 2);
+    e.movesLeft = 30;
+    e.score = 0;
+    await e.trySwap(3, 3, 3, 4);
+    var nulls = 0;
+    for (int r = 0; r < kBoardN; r++) {
+      for (int c = 0; c < kBoardN; c++) {
+        if (e.board[r][c] == null) nulls++;
+      }
+    }
+    expect(nulls, 0, reason: 'whole tray cleared and refilled');
+    expect(e.score >= 64 * 60, isTrue,
+        reason: 'all 64 cells score, got ${e.score}');
+    expect(e.movesLeft, 29);
+    e.dispose();
+  });
+
+  test('RULES 8/9: shuffle keeps specials, no pre-existing matches', () {
+    final e = JewelEngine();
+    e.startLevel(1);
+    fillSafe(e);
+    e.board[0][0] = Gem(2, 1); // bar
+    e.board[7][7] = Gem(4, 3); // brilliant
+    e.board[3][3] = Gem(0, 2); // prismatic
+    e.debugShuffle();
+    var specials = 0;
+    for (int r = 0; r < kBoardN; r++) {
+      for (int c = 0; c < kBoardN; c++) {
+        if (e.board[r][c]?.special != 0) specials++;
+      }
+    }
+    expect(specials, 3, reason: 'specials survive the reshuffle');
+    expect(hasAnyMatch(e), isFalse,
+        reason: 'reshuffled tray has no pre-existing matches');
+    e.dispose();
+  });
+
+  test('RULES 13: hint is deterministic on the same board', () {
+    final e = JewelEngine();
+    e.startLevel(3); // real generated board: guaranteed >= 1 legal swap
+    final h1 = e.computeHint();
+    final h2 = e.computeHint();
+    expect(h1, isNotNull);
+    expect(h2, isNotNull);
+    expect(h1.toString(), h2.toString());
+    e.dispose();
+  });
+
+  test('RULES 14: refill determinism — same setup, same score', () async {
+    Future<int> runOnce() async {
+      final e = JewelEngine();
+      e.startLevel(1);
+      fillSafe(e);
+      e.board[2][0] = Gem(0);
+      e.board[1][1] = Gem(0);
+      e.movesLeft = 30;
+      e.score = 0;
+      await e.trySwap(1, 0, 1, 1);
+      final s = e.score;
+      e.dispose();
+      return s;
+    }
+
+    final a = await runOnce();
+    final b = await runOnce();
+    expect(a, b, reason: 'seeded refills must be deterministic');
+  });
+
+  test('endless mode: unlimited moves, never wins or loses by itself',
+      () async {
+    final e = JewelEngine();
+    e.startEndless();
+    expect(e.mode, GameMode.endless);
+    expect(e.movesLeft, -1);
+    fillSafe(e);
+    e.board[2][0] = Gem(0);
+    e.board[1][1] = Gem(0);
+    await e.trySwap(1, 0, 1, 1);
+    expect(e.movesLeft, -1, reason: 'endless never consumes the dial');
+    expect(e.over, isFalse);
+    expect(e.score > 0, isTrue);
+    e.dispose();
+  });
+
+  test('timed mode: clock armed, unlimited moves', () {
+    final e = JewelEngine();
+    e.startTimed(120);
+    expect(e.mode, GameMode.timed);
+    expect(e.timeLeftMs, 120000);
+    expect(e.movesLeft, -1);
+    expect(e.over, isFalse);
+    e.dispose();
+  });
+
+  test('identical swaps are rejected without consuming a move', () async {
+    final e = JewelEngine();
+    e.startLevel(1);
+    fillSafe(e);
+    // (0,0)=0 and (0,1)=2 in the safe pattern; force identical pair.
+    e.board[0][1] = Gem(0);
+    e.movesLeft = 30;
+    await e.trySwap(0, 0, 0, 1);
+    expect(e.movesLeft, 30, reason: 'RULES §5: no-op swap is free');
+    expect(e.busy, isFalse);
+    e.dispose();
+  });
 }

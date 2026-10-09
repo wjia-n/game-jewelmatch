@@ -1,30 +1,47 @@
 import 'package:flutter/material.dart';
+import 'jewel_themes.dart';
 
 /// Jewel Match — "Vintage jeweler's atelier" design tokens.
+///
+/// The palette is theme-dynamic: [apply] installs the active
+/// [AtelierThemeDef] + [MetalAccent] (from settings) and every widget that
+/// reads [Atelier.velvet], [Atelier.brass] … picks up the workbench the
+/// player chose. Gem tier colors stay fixed — a Ruby is always a Ruby.
 /// Visual source of truth: stitch-batch5/jewelmatch/DESIGN.md.
-/// Deep velvet trays, dark walnut display-case wood, polished brass,
-/// faceted gemstones. Single warm lamp from the upper left. No neon, no glow.
 class Atelier {
   Atelier._();
 
-  // ---- Palette (DESIGN.md tokens) ----
-  static const velvet = Color(0xFF5A1F2B); // Velvet Burgundy
-  static const velvetDeep = Color(0xFF3A1420); // Velvet Burgundy Deep
-  static const velvetNavy = Color(0xFF1E2A4A); // Velvet Navy
-  static const velvetNavyDeep = Color(0xFF141D33); // navy shadow/inset
-  static const walnutDark = Color(0xFF2E1D12); // display-case frames
-  static const walnutMid = Color(0xFF4A3220); // panel slats
-  static const walnutLight = Color(0xFF6B4A2E); // wood highlight
-  static const brass = Color(0xFFB98A3E); // plaques, fittings
-  static const brassBright = Color(0xFFD4AF6A); // highlights, engraved edges
-  static const brassDeep = Color(0xFF7C5A26); // aged brass shadow
-  static const lampCream = Color(0xFFF2E7CF); // primary text
-  static const creamDim = Color(0xFFC9B894); // secondary text
-  static const creamFaint = Color(0xFF8A7B5E); // muted engraving
-  static const coinGold = Color(0xFFE3B341); // coins, rewards
+  static AtelierThemeDef _theme = AtelierThemes.all[0];
+  static MetalAccent _accent = AtelierThemes.accents[0];
+
+  /// Install the active theme + accent (call when settings change).
+  static void apply(AtelierThemeDef theme, MetalAccent accent) {
+    _theme = theme;
+    _accent = accent;
+  }
+
+  static AtelierThemeDef get theme => _theme;
+  static MetalAccent get accent => _accent;
+
+  // ---- Palette (theme-driven) ----
+  static Color get velvet => _theme.velvet;
+  static Color get velvetDeep => _theme.velvetDeep;
+  static Color get velvetNavy => _theme.cell;
+  static Color get velvetNavyDeep => _theme.cellDeep;
+  static Color get walnutDark => _theme.woodDark;
+  static Color get walnutMid => _theme.woodMid;
+  static Color get walnutLight => _theme.woodLight;
+  static Color get brass => _accent.base;
+  static Color get brassBright => _accent.bright;
+  static Color get brassDeep => _accent.deep;
+  static Color get lampCream => _theme.cream;
+  static Color get creamDim => _theme.creamDim;
+  static Color get creamFaint =>
+      Color.lerp(_theme.creamDim, Colors.black, 0.35)!;
+  static Color get coinGold => _theme.coin;
   static const resetRed = Color(0xFF8E2A33); // red-velvet danger button
 
-  // ---- Gem tiers (RULES.md §2) ----
+  // ---- Gem tiers (RULES.md §2) — fixed, theme-independent ----
   static const ruby = Color(0xFFA31621);
   static const sapphire = Color(0xFF1D4E89);
   static const emerald = Color(0xFF1E7A4F);
@@ -72,7 +89,7 @@ class Atelier {
   static const bodyFamily = 'EBGaramond';
 
   /// Engraved brass-plaque title.
-  static TextStyle get display => const TextStyle(
+  static TextStyle get display => TextStyle(
         fontFamily: displayFamily,
         fontWeight: FontWeight.w700,
         color: lampCream,
@@ -80,24 +97,23 @@ class Atelier {
       );
 
   /// Dark engraved text for use ON brass plaques.
-  static TextStyle get displayOnBrass => const TextStyle(
+  static TextStyle get displayOnBrass => TextStyle(
         fontFamily: displayFamily,
         fontWeight: FontWeight.w700,
         color: walnutDark,
         letterSpacing: 2.0,
       );
 
-  static TextStyle get body => const TextStyle(
+  static TextStyle get body => TextStyle(
         fontFamily: bodyFamily,
         color: lampCream,
         fontSize: 15,
         height: 1.4,
       );
 
-  static TextStyle get bodyItalic =>
-      body.copyWith(fontStyle: FontStyle.italic);
+  static TextStyle get bodyItalic => body.copyWith(fontStyle: FontStyle.italic);
 
-  static TextStyle get caption => const TextStyle(
+  static TextStyle get caption => TextStyle(
         fontFamily: bodyFamily,
         color: creamDim,
         fontSize: 12,
@@ -105,17 +121,17 @@ class Atelier {
       );
 
   /// Engraved tabular numerals for dials, tablets, counters.
-  static TextStyle get numeral => const TextStyle(
+  static TextStyle get numeral => TextStyle(
         fontFamily: displayFamily,
         fontWeight: FontWeight.w700,
         color: lampCream,
-        fontFeatures: [FontFeature.tabularFigures()],
+        fontFeatures: const [FontFeature.tabularFigures()],
       );
 
-  static TextStyle get numeralOnBrass => const TextStyle(
+  static TextStyle get numeralOnBrass => TextStyle(
         fontFamily: displayFamily,
         fontWeight: FontWeight.w700,
         color: walnutDark,
-        fontFeatures: [FontFeature.tabularFigures()],
+        fontFeatures: const [FontFeature.tabularFigures()],
       );
 }

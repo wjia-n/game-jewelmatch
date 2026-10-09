@@ -2,7 +2,7 @@ name: jewelmatch
 description: Jewel Match by Wajiha - a vintage jeweler's atelier match-3.
 publish_to: 'none'
 
-version: 1.0.0+2
+version: 1.1.0+3
 
 environment:
   sdk: ^3.13.5
@@ -13,6 +13,7 @@ dependencies:
   audioplayers: ^6.8.1
   shared_preferences: ^2.5.6
   cupertino_icons: ^1.0.8
+  in_app_purchase: ^3.2.1
 
 dev_dependencies:
   flutter_test:
@@ -24,6 +25,8 @@ flutter:
 
   assets:
     - assets/fonts/
+    - assets/jewelmatch_logo.png
+    - assets/wajiha_logo.png
 
   fonts:
     - family: NotoSerifDisplay

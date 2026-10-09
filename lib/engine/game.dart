@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 
@@ -65,6 +66,9 @@ class LevelConfig {
   }
 }
 
+/// Game modes (RULES.md §3, §9 + offline mode maximums).
+enum GameMode { levels, endless, timed }
+
 /// Events the UI drains to play sounds / show banners / navigate.
 enum EngineEventKind {
   select,
@@ -114,6 +118,13 @@ class FallAnim {
   const FallAnim(this.fromRow, this.t0);
 }
 
+/// Shockwave metadata for special-gem detonations (cell-space center).
+class BlastAnim {
+  final double r, c;
+  final int t0;
+  const BlastAnim(this.r, this.c, this.t0);
+}
+
 class JewelEngine extends ChangeNotifier {
   List<List<Gem?>> board =
       List.generate(kBoardN, (_) => List.filled(kBoardN, null));
@@ -127,6 +138,7 @@ class JewelEngine extends ChangeNotifier {
   LevelQuota? quota;
   int quotaCollected = 0;
   int hintsUsed = 0;
+  bool _quotaAnnounced = false;
 
   bool busy = false;
   bool paused = false;
@@ -135,10 +147,75 @@ class JewelEngine extends ChangeNotifier {
 
   int selR = -1, selC = -1;
 
+  // ---- mode state -------------------------------------------------------
+  GameMode mode = GameMode.levels;
+  int timeLeftMs = 0;
+  int _timedSeconds = 120;
+  Timer? _modeTimer;
+
+  /// True when the level/mode has no move limit and no target (endless,
+  /// timed). The HUD shows an infinity dial / countdown instead.
+  bool get limitless => mode != GameMode.levels;
+
+  // ---- watchdog (stuck-state recovery, exemplar pattern) ----------------
+  Timer? _watchdog;
+  int _lastStamp = 0;
+  bool _disposed = false;
+
+  /// Heartbeat: call at every await boundary of a resolution so the
+  /// watchdog can tell a progressing resolution from a dead one.
+  void _stamp() => _lastStamp = DateTime.now().millisecondsSinceEpoch;
+
+  /// Watchdog tick: if the engine looks busy but no progress happened for
+  /// 8+ seconds (and we're not paused), the await chain died — recover by
+  /// clearing animation metadata, dropping the busy lock, and letting the
+  /// move settle. Stuck states are impossible by construction.
+  void _watch() {
+    if (_disposed || over || paused) return;
+    if (!busy) return;
+    final idle = DateTime.now().millisecondsSinceEpoch - _lastStamp;
+    if (idle < 8000) return;
+    swapAnim = null;
+    clearAnim = null;
+    fallAnim = null;
+    spawnCell = null;
+    busy = false;
+    _stamp();
+    try {
+      _afterMove();
+    } catch (_) {
+      // never let recovery itself throw
+    }
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _watchdog?.cancel();
+    _modeTimer?.cancel();
+    super.dispose();
+  }
+
+  // ------------------------------------------------------- test hooks
+
+  /// Force the watchdog to see a stall (test only).
+  @visibleForTesting
+  void debugAgeStamp(int ms) => _lastStamp -= ms;
+
+  /// Run one watchdog tick immediately (test only).
+  @visibleForTesting
+  void debugWatchdogTick() => _watch();
+
+  /// Force a tray reshuffle (test only).
+  @visibleForTesting
+  void debugShuffle() => _shuffleBoard();
+
   // Animation metadata for the painter.
   SwapAnim? swapAnim;
   ClearAnim? clearAnim;
   FallAnim? fallAnim;
+  BlastAnim? blastAnim;
 
   /// Newly forged special gem, for the scale-in pop ("r,c" key).
   String? spawnCell;
@@ -167,14 +244,10 @@ class JewelEngine extends ChangeNotifier {
 
   // ---------------------------------------------------------------- setup
 
-  void startLevel(int lv) {
-    level = lv;
-    target = LevelConfig.targetFor(lv);
-    movesLeft = LevelConfig.movesFor(lv);
+  void _resetCommon() {
     moveCount = 0;
     score = 0;
     bestCombo = 1;
-    quota = LevelConfig.quotaFor(lv);
     quotaCollected = 0;
     hintsUsed = 0;
     busy = false;
@@ -185,10 +258,93 @@ class JewelEngine extends ChangeNotifier {
     swapAnim = null;
     clearAnim = null;
     fallAnim = null;
+    blastAnim = null;
     spawnCell = null;
+    _quotaAnnounced = false;
+    _modeTimer?.cancel();
+    _modeTimer = null;
+    _watchdog?.cancel();
+    _stamp();
+    _watchdog = Timer.periodic(const Duration(seconds: 3), (_) => _watch());
+  }
+
+  void startLevel(int lv) {
+    mode = GameMode.levels;
+    level = lv;
+    target = LevelConfig.targetFor(lv);
+    movesLeft = LevelConfig.movesFor(lv);
+    quota = LevelConfig.quotaFor(lv);
+    _resetCommon();
     _rng = XorShift32(level * 100003);
     _newBoard();
     notifyListeners();
+  }
+
+  /// Endless bench: no move limit, no target — chase the highest score.
+  /// The bench never ends on its own; quitting banks score/1000 coins.
+  void startEndless() {
+    mode = GameMode.endless;
+    level = 0;
+    target = 0;
+    movesLeft = -1; // unlimited; HUD shows infinity
+    quota = null;
+    _resetCommon();
+    _rng = XorShift32(DateTime.now().millisecondsSinceEpoch & 0x7FFFFFFF);
+    _newBoard();
+    notifyListeners();
+  }
+
+  /// Timed bench: [seconds] on the clock, unlimited moves, no target.
+  /// When the clock runs out the session ends and the score is banked.
+  void startTimed([int seconds = 120]) {
+    mode = GameMode.timed;
+    level = 0;
+    target = 0;
+    movesLeft = -1; // unlimited; HUD shows the clock
+    quota = null;
+    _timedSeconds = seconds;
+    _resetCommon();
+    _rng = XorShift32(DateTime.now().millisecondsSinceEpoch & 0x7FFFFFFF);
+    _newBoard();
+    timeLeftMs = seconds * 1000;
+    _modeTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
+      if (_disposed || paused || over) return;
+      _stamp();
+      timeLeftMs -= 200;
+      if (timeLeftMs <= 0) {
+        timeLeftMs = 0;
+        _modeTimer?.cancel();
+        _modeTimer = null;
+        _doTimedEnd();
+      }
+      notifyListeners();
+    });
+    notifyListeners();
+  }
+
+  void _doTimedEnd() {
+    if (over) return;
+    over = true;
+    won = true; // a timed session always "completes"; score decides glory
+    final coins = score ~/ 1000; // RULES.md §8 rate
+    _emit(EngineEvent(EngineEventKind.lose, text: '$coins'));
+    // NOTE: reuse `lose` event kind as "session over" for timed mode; the
+    // UI distinguishes via engine.mode == GameMode.timed.
+    notifyListeners();
+  }
+
+  void restart() {
+    switch (mode) {
+      case GameMode.levels:
+        startLevel(level);
+        break;
+      case GameMode.endless:
+        startEndless();
+        break;
+      case GameMode.timed:
+        startTimed(_timedSeconds);
+        break;
+    }
   }
 
   void _newBoard() {
@@ -353,51 +509,63 @@ class JewelEngine extends ChangeNotifier {
     final b = board[r2][c2];
     if (a == null || b == null) return;
     busy = true;
-    moveCount++;
-    _rng = XorShift32(level * 100003 + moveCount); // RULES.md §12
+    _stamp();
+    try {
+      moveCount++;
+      _rng = XorShift32(level * 100003 + moveCount); // RULES.md §12
 
-    // Swap the gems visually first.
-    board[r1][c1] = b;
-    board[r2][c2] = a;
-    swapAnim = SwapAnim(r1, c1, r2, c2, false, _now());
-    _emit(EngineEvent(EngineEventKind.swap,
-        text: a.special != 0 || b.special != 0 ? 'detonate' : ''));
-    await Future.delayed(const Duration(milliseconds: _swapMs));
+      // Swap the gems visually first.
+      board[r1][c1] = b;
+      board[r2][c2] = a;
+      swapAnim = SwapAnim(r1, c1, r2, c2, false, _now());
+      _emit(EngineEvent(EngineEventKind.swap,
+          text: a.special != 0 || b.special != 0 ? 'detonate' : ''));
+      _stamp();
+      await Future.delayed(const Duration(milliseconds: _swapMs));
+      _stamp();
 
-    if (a.special != 0 || b.special != 0) {
-      // Special-gem activation: always a legal move (RULES.md §4, §7).
-      movesLeft--;
+      if (a.special != 0 || b.special != 0) {
+        // Special-gem activation: always a legal move (RULES.md §4, §7).
+        if (!limitless) movesLeft--;
+        swapAnim = null;
+        _emit(const EngineEvent(EngineEventKind.detonated));
+        final clear = <String>{'$r1,$c1', '$r2,$c2'};
+        _activateSpecialPair(r1, c1, a, r2, c2, b, clear);
+        final bothPrismatic = a.special == 2 && b.special == 2;
+        blastAnim = BlastAnim(
+            bothPrismatic ? 3.5 : (r1 + r2) / 2,
+            bothPrismatic ? 3.5 : (c1 + c2) / 2,
+            _now());
+        await _clearAndRefill(clear, const [], 1);
+        await _resolveCascades();
+        _afterMove();
+        return;
+      }
+
+      final groups = _findMatches();
+      if (groups.isEmpty) {
+        // Illegal swap: bounce back, move NOT consumed (RULES.md §5).
+        board[r1][c1] = a;
+        board[r2][c2] = b;
+        moveCount--; // the attempt never happened
+        swapAnim = SwapAnim(r1, c1, r2, c2, true, _now());
+        _emit(const EngineEvent(EngineEventKind.invalid));
+        _stamp();
+        await Future.delayed(const Duration(milliseconds: _bounceMs));
+        swapAnim = null;
+        return;
+      }
+
+      if (!limitless) movesLeft--;
       swapAnim = null;
-      _emit(const EngineEvent(EngineEventKind.detonated));
-      final clear = <String>{'$r1,$c1', '$r2,$c2'};
-      _activateSpecialPair(r1, c1, a, r2, c2, b, clear);
-      await _clearAndRefill(clear, null, 1);
-      await _resolveCascades();
-      busy = false;
+      await _resolveLoop({'$r1,$c1', '$r2,$c2'});
       _afterMove();
-      return;
-    }
-
-    final groups = _findMatches();
-    if (groups.isEmpty) {
-      // Illegal swap: bounce back, move NOT consumed (RULES.md §5).
-      board[r1][c1] = a;
-      board[r2][c2] = b;
-      moveCount--; // the attempt never happened
-      swapAnim = SwapAnim(r1, c1, r2, c2, true, _now());
-      _emit(const EngineEvent(EngineEventKind.invalid));
-      await Future.delayed(const Duration(milliseconds: _bounceMs));
-      swapAnim = null;
+    } finally {
+      // The busy lock ALWAYS releases — even if a resolution step throws.
       busy = false;
+      _stamp();
       notifyListeners();
-      return;
     }
-
-    movesLeft--;
-    swapAnim = null;
-    await _resolveLoop({'$r1,$c1', '$r2,$c2'});
-    busy = false;
-    _afterMove();
   }
 
   /// Detonate a special pair swapped together (RULES.md §7, §12).
@@ -470,14 +638,22 @@ class JewelEngine extends ChangeNotifier {
 
   // ------------------------------------------------------------ resolution
 
-  Future<void> _resolveLoop(Set<String> swapCells) async {
-    int step = 0;
+  /// Resolve matches until the board is quiet. [swapCells] prefers the
+  /// creation cell for forged specials; [startStep] is 1 after a
+  /// special-gem detonation (the detonation itself was step ×1), else 0.
+  /// Every 4+ group forges its own special in the step it appears
+  /// (RULES.md §7) — including cascades after a detonation.
+  Future<void> _resolveMatches(Set<String> swapCells,
+      {int startStep = 0}) async {
+    int step = startStep;
     while (!over) {
       // Pause freezes the board mid-cascade (RULES.md §12); resume continues.
       while (paused && !over) {
         await Future.delayed(const Duration(milliseconds: 100));
+        _stamp(); // waiting on purpose — not a stall
       }
       if (over) break;
+      _stamp();
       final groups = _findMatches();
       if (groups.isEmpty) break;
       step++;
@@ -487,7 +663,27 @@ class JewelEngine extends ChangeNotifier {
       final clear = <String>{};
       final detonated = <String>{};
 
-      // L/T detection: two intersecting 3-matches in one step -> Brilliant.
+      // First pass: a Bar/Brilliant caught in a natural match detonates
+      // instead of clearing normally (RULES.md §12). This must run BEFORE
+      // special-creation picks its cell, so a detonated special is never
+      // chosen as the forge cell.
+      var detonatedThisStep = false;
+      for (final grp in groups) {
+        for (final k in grp) {
+          final g = board[_kr(k)][_kc(k)];
+          if (g != null && (g.special == 1 || g.special == 3)) {
+            _detonateSingle(_kr(k), _kc(k), g, clear);
+            detonated.add(k);
+            clear.add(k);
+            detonatedThisStep = true;
+          } else {
+            clear.add(k);
+          }
+        }
+      }
+
+      // L/T detection: two intersecting 3-matches in one step -> one
+      // Brilliant at the intersection (RULES.md §7, §12).
       String? ltCell;
       outer:
       for (int i = 0; i < groups.length; i++) {
@@ -500,128 +696,90 @@ class JewelEngine extends ChangeNotifier {
         }
       }
 
-      // Candidate special: L/T -> Brilliant; else first 4+ group
-      // (5+ -> Prismatic, 4 -> Faceted Bar). Swap origin cell preferred
-      // (RULES.md §7).
-      String? candidateKey;
-      int candidateKind = 0;
-      if (ltCell != null) {
-        candidateKey = ltCell;
-        candidateKind = 3;
-      } else {
-        for (final grp in groups) {
-          if (grp.length >= 4 && candidateKey == null) {
-            final sorted = grp.toList()..sort();
-            candidateKey = sorted.firstWhere(
-              (k) => swapCells.contains(k),
-              orElse: () => sorted.first,
-            );
-            candidateKind = grp.length >= 5 ? 2 : 1;
-          }
-        }
-      }
-
-      var detonatedThisStep = false;
-      for (final grp in groups) {
-        for (final k in grp) {
-          final g = board[_kr(k)][_kc(k)];
-          if (g != null && (g.special == 1 || g.special == 3)) {
-            // A Bar/Brilliant in a natural match detonates instead of
-            // clearing normally (RULES.md §12) — even at the candidate
-            // creation cell.
-            _detonateSingle(_kr(k), _kc(k), g, clear);
-            detonated.add(k);
-            clear.add(k);
-            detonatedThisStep = true;
-          } else {
-            clear.add(k);
-          }
-        }
-      }
-
-      // Final creation cell: the candidate unless it detonated, else the
+      // Special forging: EVERY 4+ group forges its own special in the same
+      // step (RULES.md §7); the swap-origin cell is preferred, else the
       // first matched cell in reading order that is not a detonated
       // special (RULES.md §12).
-      String? spawnKey;
-      int spawnKind = 0, spawnType = 0;
-      if (candidateKey != null) {
-        if (!detonated.contains(candidateKey)) {
-          spawnKey = candidateKey;
-        } else {
-          final sorted = groups
-              .expand((g) => g)
-              .toSet()
-              .difference(detonated)
-              .toList()
-            ..sort();
-          spawnKey = sorted.isEmpty ? null : sorted.first;
+      final spawns = <_Spawn>[];
+      String? pickKey(Set<String> grp) {
+        final sorted = grp.toList()..sort();
+        var key = sorted.firstWhere(
+          (k) => swapCells.contains(k),
+          orElse: () => sorted.first,
+        );
+        if (detonated.contains(key)) {
+          final rest = sorted.where((k) => !detonated.contains(k));
+          if (rest.isEmpty) return null;
+          key = rest.first;
         }
-        if (spawnKey != null) {
-          spawnKind = candidateKind;
-          final sg = board[_kr(spawnKey)][_kc(spawnKey)];
-          if (sg == null) {
-            spawnKey = null; // safety: never spawn on an empty cell
-          } else {
-            spawnType = sg.type;
+        final g = board[_kr(key)][_kc(key)];
+        if (g == null) return null; // safety: never spawn on empty cell
+        return key;
+      }
+
+      if (ltCell != null) {
+        final key = detonated.contains(ltCell)
+            ? pickKey(groups.expand((g) => g).toSet())
+            : ltCell;
+        if (key != null) {
+          spawns.add(_Spawn(
+              key, 3, board[_kr(key)][_kc(key)]!.type));
+        }
+      } else {
+        for (final grp in groups) {
+          if (grp.length < 4) continue;
+          final key = pickKey(grp);
+          if (key != null) {
+            spawns.add(_Spawn(key, grp.length >= 5 ? 2 : 1,
+                board[_kr(key)][_kc(key)]!.type));
           }
         }
       }
 
+      // Final creation cells: each spawn key is guaranteed non-detonated
+      // and non-empty by pickKey above (RULES.md §12).
       if (detonatedThisStep) {
+        var br = 0.0, bc = 0.0;
+        for (final k in detonated) {
+          br += _kr(k);
+          bc += _kc(k);
+        }
+        blastAnim = BlastAnim(
+            br / detonated.length, bc / detonated.length, _now());
         _emit(const EngineEvent(EngineEventKind.detonated));
       } else {
         _emit(EngineEvent(EngineEventKind.match,
             step: step, gems: clear.length));
       }
-      final spawn = spawnKey == null
-          ? null
-          : _Spawn(spawnKey, spawnKind, spawnType);
-      await _clearAndRefill(clear, spawn, mult);
-      if (spawn != null) {
+      await _clearAndRefill(clear, spawns, mult);
+      for (final s in spawns) {
         _emit(EngineEvent(EngineEventKind.specialCreated,
-            specialKind: spawn.kind));
-        score += spawn.kind == 2
+            specialKind: s.kind));
+        score += s.kind == 2
             ? 2000
-            : spawn.kind == 3
+            : s.kind == 3
                 ? 1000
                 : 500; // RULES.md §8 creation bonuses
       }
+      _stamp();
       await Future.delayed(const Duration(milliseconds: 120));
+      _stamp();
     }
   }
 
-  Future<void> _resolveCascades() async {
-    // After a special-swap detonation, resolve any follow-up cascades.
-    int step = 1;
-    while (!over) {
-      while (paused && !over) {
-        await Future.delayed(const Duration(milliseconds: 100));
-      }
-      if (over) break;
-      final groups = _findMatches();
-      if (groups.isEmpty) break;
-      step++;
-      final mult = min(step, 8);
-      final clear = <String>{};
-      for (final grp in groups) {
-        for (final k in grp) {
-          final g = board[_kr(k)][_kc(k)];
-          if (g != null && (g.special == 1 || g.special == 3)) {
-            _detonateSingle(_kr(k), _kc(k), g, clear);
-            clear.add(k);
-          } else {
-            clear.add(k);
-          }
-        }
-      }
-      _emit(EngineEvent(EngineEventKind.match, step: step, gems: clear.length));
-      await _clearAndRefill(clear, null, mult);
-      await Future.delayed(const Duration(milliseconds: 120));
-    }
-  }
+  /// After a normal swap: resolve the initial matches plus all cascades.
+  Future<void> _resolveLoop(Set<String> swapCells) =>
+      _resolveMatches(swapCells);
+
+  /// After a special-swap detonation: resolve follow-up cascades. The
+  /// detonation itself scored at ×1, so cascades start at step 2
+  /// (RULES.md §7, §8).
+  Future<void> _resolveCascades() =>
+      _resolveMatches(const {}, startStep: 1);
 
   Future<void> _clearAndRefill(
-      Set<String> clear, _Spawn? spawn, int mult) async {
+      Set<String> clear, List<_Spawn> spawns, int mult) async {
+    _stamp();
     // Score each cleared gem: base x cascade multiplier (RULES.md §8).
     for (final k in clear) {
       final g = board[_kr(k)][_kc(k)];
@@ -632,7 +790,10 @@ class JewelEngine extends ChangeNotifier {
         }
       }
     }
-    if (quota != null && quotaCollected >= quota!.count) {
+    if (quota != null &&
+        !_quotaAnnounced &&
+        quotaCollected >= quota!.count) {
+      _quotaAnnounced = true;
       _emit(EngineEvent(EngineEventKind.quotaMet,
           text: '$quotaCollected/${quota!.count}'));
     }
@@ -640,12 +801,17 @@ class JewelEngine extends ChangeNotifier {
     clearAnim = ClearAnim(Set.of(clear), _now());
     notifyListeners();
     await Future.delayed(const Duration(milliseconds: _clearMs));
+    _stamp();
     for (final k in clear) {
       board[_kr(k)][_kc(k)] = null;
     }
-    if (spawn != null) {
+    for (final spawn in spawns) {
       board[_kr(spawn.key)][_kc(spawn.key)] = Gem(spawn.type, spawn.kind);
-      spawnCell = spawn.key;
+    }
+    if (spawns.isNotEmpty) {
+      // Animate the first forged special popping in; the painter keys off
+      // spawnCell for the scale-in.
+      spawnCell = spawns.first.key;
       spawnT0 = _now();
     }
     clearAnim = null;
@@ -683,17 +849,23 @@ class JewelEngine extends ChangeNotifier {
   // -------------------------------------------------------------- endgame
 
   void _afterMove() {
+    blastAnim = null; // the shockwave has played out
     if (over) return;
-    if (_checkWin()) {
-      _doWin();
-      return;
+    if (mode == GameMode.levels) {
+      if (_checkWin()) {
+        _doWin();
+        return;
+      }
+      if (movesLeft <= 0) {
+        _doLose();
+        return;
+      }
     }
-    if (movesLeft <= 0) {
-      _doLose();
-      return;
+    // Persist on every move completion (RULES.md §12; levels mode only —
+    // endless/timed benches bank their score on exit instead).
+    if (mode == GameMode.levels) {
+      _emit(const EngineEvent(EngineEventKind.moveDone));
     }
-    // Persist on every move completion (RULES.md §12).
-    _emit(const EngineEvent(EngineEventKind.moveDone));
     if (!_hasMove()) {
       _shuffleBoard();
     } else {
@@ -741,9 +913,15 @@ class JewelEngine extends ChangeNotifier {
         if (g != null && g.special != 0) specials['$r,$c'] = g.copy();
       }
     }
-    _newBoard();
-    for (final e in specials.entries) {
-      board[_kr(e.key)][_kc(e.key)] = e.value;
+    // Regenerate until the board (with specials restored) has no
+    // pre-existing matches and at least one legal swap (RULES.md §7:
+    // "still no pre-existing matches").
+    for (int attempt = 0; attempt < 40; attempt++) {
+      _newBoard();
+      for (final e in specials.entries) {
+        board[_kr(e.key)][_kc(e.key)] = e.value;
+      }
+      if (_findMatches().isEmpty) break;
     }
     _emit(const EngineEvent(EngineEventKind.shuffled,
         text: 'Tray Reshuffled')); // RULES.md §7
@@ -866,18 +1044,21 @@ class JewelEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  void restart() => startLevel(level);
+  // ------------------------------------------------------------ lifecycle
+  // (restart() is defined with the mode-aware setup methods above)
 
   // ---------------------------------------------------------- persistence
 
   Map<String, dynamic> toJson() => {
-        'v': 1,
+        'v': 2,
+        'mode': mode.index,
         'level': level,
         'score': score,
         'movesLeft': movesLeft,
         'moveCount': moveCount,
         'quotaCollected': quotaCollected,
         'hintsUsed': hintsUsed,
+        'timeLeftMs': timeLeftMs,
         'board': [
           for (int r = 0; r < kBoardN; r++)
             [for (int c = 0; c < kBoardN; c++) board[r][c]?.code ?? -1]
@@ -886,6 +1067,7 @@ class JewelEngine extends ChangeNotifier {
 
   bool restore(Map<String, dynamic> data) {
     try {
+      mode = GameMode.values[(data['mode'] as num?)?.toInt() ?? 0];
       level = (data['level'] as num).toInt();
       target = LevelConfig.targetFor(level);
       movesLeft = (data['movesLeft'] as num).toInt();
@@ -894,6 +1076,7 @@ class JewelEngine extends ChangeNotifier {
       quota = LevelConfig.quotaFor(level);
       quotaCollected = (data['quotaCollected'] as num).toInt();
       hintsUsed = (data['hintsUsed'] as num).toInt();
+      timeLeftMs = (data['timeLeftMs'] as num?)?.toInt() ?? 0;
       final rows = data['board'] as List;
       for (int r = 0; r < kBoardN; r++) {
         final row = rows[r] as List;
@@ -908,8 +1091,13 @@ class JewelEngine extends ChangeNotifier {
       won = false;
       selR = selC = -1;
       swapAnim = clearAnim = fallAnim = null;
+      blastAnim = null;
       spawnCell = null;
+      _quotaAnnounced = quota != null && quotaCollected >= quota!.count;
       _rng = XorShift32(level * 100003 + moveCount);
+      _stamp();
+      _watchdog?.cancel();
+      _watchdog = Timer.periodic(const Duration(seconds: 3), (_) => _watch());
       notifyListeners();
       return true;
     } catch (_) {

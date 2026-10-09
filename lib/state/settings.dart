@@ -12,6 +12,14 @@ class AtelierSettings extends ChangeNotifier {
   static const _kUnlocked = 'jm_unlocked_level';
   static const _kStars = 'jm_stars_json';
   static const _kBest = 'jm_best_json';
+  static const _kProfile = 'jm_profile_name';
+  static const _kTheme = 'jm_theme_id';
+  static const _kGemStyle = 'jm_gem_style_id';
+  static const _kAccent = 'jm_accent_id';
+  static const _kCustomTheme = 'jm_custom_theme_json';
+  static const _kEndlessBest = 'jm_endless_best';
+  static const _kTimedBest = 'jm_timed_best';
+  static const _kPro = 'jm_pro_unlocked';
 
   bool musicOn = true;
   bool sfxOn = true;
@@ -30,6 +38,25 @@ class AtelierSettings extends ChangeNotifier {
   /// Best score per level.
   final Map<int, int> bestScores = {};
 
+  /// Player profile name (editable, persisted).
+  String profileName = 'Jeweler';
+
+  /// Atelier theme / gem cut style / metal accent ids (see jewel_themes.dart
+  /// and gem_styles.dart). Persisted.
+  String themeId = 'burgundy_velvet';
+  String gemStyleId = 'round_brilliant';
+  String accentId = 'brass';
+
+  /// Custom atelier theme (PRO), stored as a compact JSON color map.
+  String? customThemeJson;
+
+  /// Best scores for the endless and timed benches.
+  int endlessBest = 0;
+  int timedBest = 0;
+
+  /// Pro unlock, mirrored from the Play Billing purchase (restorable).
+  bool proUnlocked = false;
+
   bool _loaded = false;
   bool get loaded => _loaded;
 
@@ -41,6 +68,14 @@ class AtelierSettings extends ChangeNotifier {
     sfxVolume = p.getDouble(_kSfxVol) ?? 0.8;
     coins = p.getInt(_kCoins) ?? 0;
     unlockedLevel = p.getInt(_kUnlocked) ?? 1;
+    profileName = p.getString(_kProfile) ?? 'Jeweler';
+    themeId = p.getString(_kTheme) ?? 'burgundy_velvet';
+    gemStyleId = p.getString(_kGemStyle) ?? 'round_brilliant';
+    accentId = p.getString(_kAccent) ?? 'brass';
+    customThemeJson = p.getString(_kCustomTheme);
+    endlessBest = p.getInt(_kEndlessBest) ?? 0;
+    timedBest = p.getInt(_kTimedBest) ?? 0;
+    proUnlocked = p.getBool(_kPro) ?? false;
     final starsRaw = p.getString(_kStars);
     if (starsRaw != null) {
       try {
@@ -67,6 +102,18 @@ class AtelierSettings extends ChangeNotifier {
     await p.setDouble(_kSfxVol, sfxVolume);
     await p.setInt(_kCoins, coins);
     await p.setInt(_kUnlocked, unlockedLevel);
+    await p.setString(_kProfile, profileName);
+    await p.setString(_kTheme, themeId);
+    await p.setString(_kGemStyle, gemStyleId);
+    await p.setString(_kAccent, accentId);
+    if (customThemeJson == null) {
+      await p.remove(_kCustomTheme);
+    } else {
+      await p.setString(_kCustomTheme, customThemeJson!);
+    }
+    await p.setInt(_kEndlessBest, endlessBest);
+    await p.setInt(_kTimedBest, timedBest);
+    await p.setBool(_kPro, proUnlocked);
     await p.setString(_kStars,
         jsonEncode(stars.map((k, v) => MapEntry(k.toString(), v))));
     await p.setString(_kBest,
@@ -127,15 +174,94 @@ class AtelierSettings extends ChangeNotifier {
     unlockedLevel = 1;
     stars.clear();
     bestScores.clear();
+    endlessBest = 0;
+    timedBest = 0;
     await p.remove(_kCoins);
     await p.remove(_kUnlocked);
     await p.remove(_kStars);
     await p.remove(_kBest);
+    await p.remove(_kEndlessBest);
+    await p.remove(_kTimedBest);
     await MidGameSave.clear();
+    // Cosmetic choices (theme, gem style, accent, profile name) survive —
+    // only progress is reset.
+    await _save();
     notifyListeners();
   }
 
   int totalStars() => stars.values.fold(0, (a, b) => a + b);
+
+  // ------------------------------------------------------------ profile
+
+  Future<void> setProfileName(String v) async {
+    profileName = v.trim().isEmpty ? 'Jeweler' : v.trim();
+    await _save();
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------ themes
+
+  Future<void> setThemeId(String v) async {
+    themeId = v;
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> setGemStyleId(String v) async {
+    gemStyleId = v;
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> setAccentId(String v) async {
+    accentId = v;
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> setCustomThemeJson(String? v) async {
+    customThemeJson = v;
+    if (v != null) themeId = 'custom';
+    await _save();
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------ bests
+
+  /// Returns true when the score is a new endless best.
+  Future<bool> recordEndlessScore(int score) async {
+    final isBest = score > endlessBest;
+    if (isBest) endlessBest = score;
+    await _save();
+    notifyListeners();
+    return isBest;
+  }
+
+  /// Returns true when the score is a new timed best.
+  Future<bool> recordTimedScore(int score) async {
+    final isBest = score > timedBest;
+    if (isBest) timedBest = score;
+    await _save();
+    notifyListeners();
+    return isBest;
+  }
+
+  // ------------------------------------------------------------ pro
+
+  Future<void> setProUnlocked(bool v) async {
+    proUnlocked = v;
+    await _save();
+    notifyListeners();
+  }
+
+  /// Free tier: first 4 themes / 3 gem styles. Everything else needs Pro.
+  bool themeIsFree(String id) =>
+      const ['burgundy_velvet', 'navy_noir', 'emerald_study', 'walnut_gold']
+          .contains(id);
+  bool gemStyleIsFree(String id) =>
+      const ['round_brilliant', 'cushion', 'oval'].contains(id);
+  bool get themeLocked => !proUnlocked && !themeIsFree(themeId);
+  bool get gemStyleLocked => !proUnlocked && !gemStyleIsFree(gemStyleId);
 }
 
 /// Mid-game persistence (RULES.md §12: state persisted on every move

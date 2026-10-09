@@ -4,18 +4,28 @@ import '../theme/atelier.dart';
 import '../state/settings.dart';
 import '../audio/sound_engine.dart';
 import '../engine/game.dart';
+import '../services/iap_service.dart';
 import 'widgets.dart';
 import 'board_screen.dart';
 import 'settings_screen.dart';
+import 'theme_screen.dart';
+import 'pro_screen.dart';
+import 'how_to_play.dart';
 
-/// Main menu — Stitch screen 1: walnut case, burgundy velvet backdrop,
-/// brass title plaque, a velvet tray of scattered faceted gems with a
-/// brass loupe, and brass plaque buttons.
+/// Main menu — Stitch screen 1: walnut case, velvet backdrop, brass title
+/// plaque, scattered faceted gems with a brass loupe, and brass plaque
+/// buttons. Plus: profile name, offline modes (ateliers / endless / timed),
+/// theme picker, Pro store and How to Play.
 class MenuScreen extends StatefulWidget {
   final AtelierSettings settings;
   final SoundEngine sound;
-  const MenuScreen(
-      {super.key, required this.settings, required this.sound});
+  final StoreService store;
+  const MenuScreen({
+    super.key,
+    required this.settings,
+    required this.sound,
+    required this.store,
+  });
 
   @override
   State<MenuScreen> createState() => _MenuScreenState();
@@ -43,9 +53,9 @@ class _MenuScreenState extends State<MenuScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
-      widget.sound.stopMusic();
+      widget.sound.onAppBackground();
     } else if (state == AppLifecycleState.resumed) {
-      widget.sound.startMenuMusic();
+      widget.sound.onAppForeground();
     }
   }
 
@@ -60,7 +70,7 @@ class _MenuScreenState extends State<MenuScreen>
     });
   }
 
-  void _openAtelier(int level, {bool restore = false}) {
+  void _openLevels(int level, {bool restore = false}) {
     widget.sound.play(SfxKind.click);
     widget.sound.startGameMusic();
     Navigator.of(context)
@@ -68,6 +78,8 @@ class _MenuScreenState extends State<MenuScreen>
             builder: (_) => BoardScreen(
                   settings: widget.settings,
                   sound: widget.sound,
+                  store: widget.store,
+                  mode: GameMode.levels,
                   level: level,
                   restore: restore,
                 )))
@@ -78,67 +90,90 @@ class _MenuScreenState extends State<MenuScreen>
     });
   }
 
-  void _showHowToPlay() {
+  void _openEndless() {
     widget.sound.play(SfxKind.click);
-    showDialog(
+    widget.sound.startGameMusic();
+    Navigator.of(context)
+        .push(MaterialPageRoute(
+            builder: (_) => BoardScreen(
+                  settings: widget.settings,
+                  sound: widget.sound,
+                  store: widget.store,
+                  mode: GameMode.endless,
+                )))
+        .then((_) {
+      widget.sound.startMenuMusic();
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _openTimed() {
+    widget.sound.play(SfxKind.click);
+    widget.sound.startGameMusic();
+    Navigator.of(context)
+        .push(MaterialPageRoute(
+            builder: (_) => BoardScreen(
+                  settings: widget.settings,
+                  sound: widget.sound,
+                  store: widget.store,
+                  mode: GameMode.timed,
+                  timedSeconds: 120,
+                )))
+        .then((_) {
+      widget.sound.startMenuMusic();
+      if (mounted) setState(() {});
+    });
+  }
+
+  Future<void> _editProfile() async {
+    widget.sound.play(SfxKind.click);
+    final ctrl =
+        TextEditingController(text: widget.settings.profileName);
+    final name = await showDialog<String>(
       context: context,
       builder: (_) => Dialog(
         backgroundColor: Colors.transparent,
         child: WalnutPanel(
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                    child: Text('HOW TO PLAY',
-                        style: Atelier.display.copyWith(
-                            fontSize: 22, letterSpacing: 2))),
-                const SizedBox(height: 8),
-                const EngravedDivider(),
-                const SizedBox(height: 12),
-                _rule(0,
-                    'Swap adjacent gems to line up 3 or more of a kind. Matched gems are cleared, the rest fall, and cascades multiply your score.'),
-                _rule(1,
-                    'Match 4 to forge a Faceted Bar — swap it to clear a whole row and column.'),
-                _rule(2,
-                    'Match 5 to forge a Prismatic Diamond — swap it to clear every gem of a kind.'),
-                _rule(3,
-                    'Match in an L or T shape to forge a Brilliant — swap it to blast a 3×3 area.'),
-                _rule(4,
-                    'Each move counts. Reach the atelier\'s target score before your moves run out. From Atelier 6, you must also collect the quota gems.'),
-                _rule(5,
-                    'Leftover moves polish your score: +250 each. Stuck? The apprentice\'s loupe offers a hint — 3 free per atelier.'),
-                const SizedBox(height: 12),
-                Center(
-                  child: BrassButton(
-                    label: 'TO THE BENCH',
-                    fontSize: 16,
-                    onTap: () => Navigator.of(context).pop(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('YOUR NAME, JEWELER',
+                  style: Atelier.display
+                      .copyWith(fontSize: 20, letterSpacing: 2)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                maxLength: 18,
+                textAlign: TextAlign.center,
+                style: Atelier.numeral.copyWith(fontSize: 20),
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor:
+                      Colors.black.withValues(alpha: 0.35),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide:
+                        BorderSide(color: Atelier.brass),
                   ),
+                  counterText: '',
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(height: 14),
+              BrassButton(
+                label: 'ENGRAVE IT',
+                fontSize: 16,
+                onTap: () =>
+                    Navigator.of(context).pop(ctrl.text),
+              ),
+            ],
           ),
         ),
       ),
     );
-  }
-
-  Widget _rule(int gem, String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 4, right: 8),
-            child: GemStone(type: gem % 6, size: 16),
-          ),
-          Expanded(child: Text(text, style: Atelier.body)),
-        ],
-      ),
-    );
+    if (name != null) {
+      await widget.settings.setProfileName(name);
+      if (mounted) setState(() {});
+    }
   }
 
   @override
@@ -156,15 +191,15 @@ class _MenuScreenState extends State<MenuScreen>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('✦  THE VINTAGE JEWELER\'S ATELIER  ✦',
+                  Text('\u2726  THE VINTAGE JEWELER\u2019S ATELIER  \u2726',
                       textAlign: TextAlign.center,
                       style: Atelier.caption
                           .copyWith(letterSpacing: 3, fontSize: 12)),
                   const SizedBox(height: 12),
                   // Hero: velvet tray of scattered gems + brass loupe.
-                  _GemTray(),
+                  _GemTray(gemStyleId: s.gemStyleId),
                   const SizedBox(height: 14),
-                  const BrassPlaque(
+                  BrassPlaque(
                       text: 'JEWEL MATCH',
                       fontSize: 34,
                       letterSpacing: 5),
@@ -175,19 +210,69 @@ class _MenuScreenState extends State<MenuScreen>
                     style: Atelier.bodyItalic
                         .copyWith(color: Atelier.creamDim),
                   ),
+                  const SizedBox(height: 10),
+                  // Profile + purse row.
+                  AnimatedBuilder(
+                    animation: s,
+                    builder: (_, _) => Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        GestureDetector(
+                          onTap: _editProfile,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.black
+                                  .withValues(alpha: 0.35),
+                              borderRadius:
+                                  BorderRadius.circular(20),
+                              border: Border.all(
+                                  color: Atelier.brass
+                                      .withValues(alpha: 0.6)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.person,
+                                    color: Atelier.brassBright,
+                                    size: 16),
+                                const SizedBox(width: 6),
+                                Text(s.profileName,
+                                    style: Atelier.numeral
+                                        .copyWith(fontSize: 15)),
+                                const SizedBox(width: 4),
+                                Icon(Icons.edit,
+                                    color: Atelier.creamDim,
+                                    size: 13),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        _counter(Icons.monetization_on,
+                            '${s.coins}', Atelier.coinGold),
+                        if (s.proUnlocked) ...[
+                          const SizedBox(width: 10),
+                          _proBadge(),
+                        ],
+                      ],
+                    ),
+                  ),
                   const SizedBox(height: 6),
                   const EngravedDivider(),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
+                  // ---- mode cards ----
                   SizedBox(
                     width: double.infinity,
                     child: BrassButton(
                       label: _hasSave
                           ? 'CONTINUE ATELIER $_saveLevel'
-                          : 'BEGIN ATELIER $nextLevel',
+                          : 'ATELIERS · BEGIN $nextLevel',
                       sublabel: _hasSave
                           ? 'Resume your work at the bench'
-                          : 'Target ${LevelConfig.targetFor(nextLevel)} pts · ${LevelConfig.movesFor(nextLevel)} moves',
-                      onTap: () => _openAtelier(
+                          : 'Target ${LevelConfig.targetFor(nextLevel)} pts \u00b7 ${LevelConfig.movesFor(nextLevel)} moves',
+                      onTap: () => _openLevels(
                           _hasSave ? _saveLevel : nextLevel,
                           restore: _hasSave),
                     ),
@@ -197,12 +282,12 @@ class _MenuScreenState extends State<MenuScreen>
                     SizedBox(
                       width: double.infinity,
                       child: BrassButton(
-                        label: 'NEW · ATELIER $nextLevel',
+                        label: 'NEW \u00b7 ATELIER $nextLevel',
                         primary: false,
                         fontSize: 16,
                         onTap: () {
                           MidGameSave.clear();
-                          _openAtelier(nextLevel);
+                          _openLevels(nextLevel);
                         },
                       ),
                     ),
@@ -211,11 +296,88 @@ class _MenuScreenState extends State<MenuScreen>
                   Row(
                     children: [
                       Expanded(
+                        child: _ModeCard(
+                          title: 'ENDLESS',
+                          sub: s.endlessBest > 0
+                              ? 'Best ${s.endlessBest}'
+                              : 'No clock, no limit',
+                          icon: Icons.all_inclusive,
+                          onTap: _openEndless,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _ModeCard(
+                          title: 'TIMED',
+                          sub: s.timedBest > 0
+                              ? 'Best ${s.timedBest}'
+                              : '2 minutes of fire',
+                          icon: Icons.timer,
+                          onTap: _openTimed,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: BrassButton(
+                          label: 'THEMES',
+                          primary: false,
+                          fontSize: 15,
+                          onTap: () {
+                            widget.sound.play(SfxKind.click);
+                            Navigator.of(context)
+                                .push(MaterialPageRoute(
+                                    builder: (_) => ThemeScreen(
+                                        settings: s,
+                                        sound: widget.sound,
+                                        store: widget.store)))
+                                .then((_) {
+                              if (mounted) setState(() {});
+                            });
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: BrassButton(
+                          label: s.proUnlocked ? 'PRO \u2713' : 'GET PRO',
+                          primary: false,
+                          fontSize: 15,
+                          onTap: () {
+                            widget.sound.play(SfxKind.click);
+                            Navigator.of(context)
+                                .push(MaterialPageRoute(
+                                    builder: (_) => ProScreen(
+                                        settings: s,
+                                        sound: widget.sound,
+                                        store: widget.store)))
+                                .then((_) {
+                              if (mounted) setState(() {});
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
                         child: BrassButton(
                           label: 'HOW TO PLAY',
                           primary: false,
-                          fontSize: 16,
-                          onTap: _showHowToPlay,
+                          fontSize: 15,
+                          onTap: () {
+                            widget.sound.play(SfxKind.click);
+                            Navigator.of(context).push(
+                                MaterialPageRoute(
+                                    builder: (_) =>
+                                        HowToPlayScreen(
+                                            sound: widget.sound)));
+                          },
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -223,7 +385,7 @@ class _MenuScreenState extends State<MenuScreen>
                         child: BrassButton(
                           label: 'SETTINGS',
                           primary: false,
-                          fontSize: 16,
+                          fontSize: 15,
                           onTap: () {
                             widget.sound.play(SfxKind.click);
                             Navigator.of(context)
@@ -240,17 +402,13 @@ class _MenuScreenState extends State<MenuScreen>
                     ],
                   ),
                   const SizedBox(height: 18),
-                  // Coin purse + star tally.
                   AnimatedBuilder(
                     animation: s,
                     builder: (_, _) => Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        _counter(Icons.monetization_on,
-                            '${s.coins}', Atelier.coinGold),
-                        const SizedBox(width: 24),
-                        _counter(Icons.star,
-                            '${s.totalStars()}', Atelier.brassBright),
+                        _counter(Icons.star, '${s.totalStars()}',
+                            Atelier.brassBright),
                         const SizedBox(width: 24),
                         _counter(Icons.workspace_premium,
                             'ATELIER ${s.unlockedLevel}',
@@ -279,10 +437,79 @@ class _MenuScreenState extends State<MenuScreen>
       ],
     );
   }
+
+  Widget _proBadge() {
+    return Container(
+      padding:
+          const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        gradient: LinearGradient(
+          colors: [Atelier.brassBright, Atelier.brass],
+        ),
+      ),
+      child: Text('PRO',
+          style: Atelier.numeralOnBrass.copyWith(fontSize: 13)),
+    );
+  }
+}
+
+/// Small brass mode card for Endless / Timed.
+class _ModeCard extends StatelessWidget {
+  final String title;
+  final String sub;
+  final IconData icon;
+  final VoidCallback onTap;
+  const _ModeCard(
+      {required this.title,
+      required this.sub,
+      required this.icon,
+      required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Atelier.walnutMid, Atelier.walnutDark],
+          ),
+          border: Border.all(color: Atelier.brass, width: 1.5),
+          boxShadow: const [
+            BoxShadow(
+                color: Colors.black54,
+                blurRadius: 8,
+                offset: Offset(0, 4)),
+          ],
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: Atelier.brassBright, size: 26),
+            const SizedBox(height: 6),
+            Text(title,
+                style: Atelier.display
+                    .copyWith(fontSize: 16, letterSpacing: 2)),
+            const SizedBox(height: 2),
+            Text(sub,
+                style: Atelier.caption.copyWith(fontSize: 11),
+                textAlign: TextAlign.center),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// Velvet tray of scattered faceted gems with a brass loupe.
 class _GemTray extends StatelessWidget {
+  final String gemStyleId;
+  const _GemTray({required this.gemStyleId});
+
   @override
   Widget build(BuildContext context) {
     final rng = Random(20261009);
@@ -297,7 +524,8 @@ class _GemTray extends StatelessWidget {
           child: GemStone(
               type: i % 6,
               special: i == 4 ? 2 : 0,
-              size: size),
+              size: size,
+              styleId: gemStyleId),
         ),
       ));
     }
@@ -305,13 +533,13 @@ class _GemTray extends StatelessWidget {
       height: 190,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
             Atelier.velvetNavy,
             Atelier.velvetNavyDeep,
-            Color(0xFF0D1322),
+            const Color(0xFF0D1322),
           ],
         ),
         border: Border.all(color: Atelier.walnutDark, width: 5),
@@ -362,7 +590,7 @@ class _LoupePainter extends CustomPainter {
     final r = size.width * 0.44;
     // handle
     final handle = Paint()
-      ..shader = const LinearGradient(
+      ..shader = LinearGradient(
         colors: [Atelier.walnutLight, Atelier.walnutDark],
       ).createShader(
           Rect.fromLTWH(c.dx - 8, c.dy + r * 0.7, 16, size.height * 0.4));
@@ -379,7 +607,7 @@ class _LoupePainter extends CustomPainter {
         c,
         r,
         Paint()
-          ..shader = const RadialGradient(
+          ..shader = RadialGradient(
             center: Alignment(-0.3, -0.3),
             colors: [
               Atelier.brassBright,
