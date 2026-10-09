@@ -129,6 +129,15 @@ class _MenuScreenState extends State<MenuScreen>
     widget.sound.play(SfxKind.click);
     final ctrl =
         TextEditingController(text: widget.settings.profileName);
+    // Guards against double-popping the route: tapping the ENGRAVE IT button
+    // or pressing keyboard-done both steal focus (firing onFocusChange) AND
+    // trigger their own commit — only the first one may pop the dialog.
+    var committed = false;
+    void commit() {
+      if (committed) return;
+      committed = true;
+      Navigator.of(context).pop(ctrl.text);
+    }
     final name = await showDialog<String>(
       context: context,
       builder: (_) => Dialog(
@@ -141,29 +150,39 @@ class _MenuScreenState extends State<MenuScreen>
                   style: Atelier.display
                       .copyWith(fontSize: 20, letterSpacing: 2)),
               const SizedBox(height: 12),
-              TextField(
-                controller: ctrl,
-                maxLength: 18,
-                textAlign: TextAlign.center,
-                style: Atelier.numeral.copyWith(fontSize: 20),
-                decoration: InputDecoration(
-                  filled: true,
-                  fillColor:
-                      Colors.black.withValues(alpha: 0.35),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide:
-                        BorderSide(color: Atelier.brass),
+              Focus(
+                // Focus-loss commits the rename too (not just keyboard-done
+                // or the button): e.g. the user taps elsewhere in the dialog
+                // instead of submitting. The commit guard above keeps this
+                // from double-popping when the button/submit also fires.
+                onFocusChange: (hasFocus) {
+                  if (!hasFocus) commit();
+                },
+                child: TextField(
+                  controller: ctrl,
+                  maxLength: 18,
+                  textAlign: TextAlign.center,
+                  style: Atelier.numeral.copyWith(fontSize: 20),
+                  // Keyboard-done commits the rename too (not just the button).
+                  onSubmitted: (_) => commit(),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor:
+                        Colors.black.withValues(alpha: 0.35),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide:
+                          BorderSide(color: Atelier.brass),
+                    ),
+                    counterText: '',
                   ),
-                  counterText: '',
                 ),
               ),
               const SizedBox(height: 14),
               BrassButton(
                 label: 'ENGRAVE IT',
                 fontSize: 16,
-                onTap: () =>
-                    Navigator.of(context).pop(ctrl.text),
+                onTap: commit,
               ),
             ],
           ),
