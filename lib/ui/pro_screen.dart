@@ -241,19 +241,6 @@ class _ProScreenState extends State<ProScreen> {
                 ),
               ],
             )
-          else
-            ValueListenableBuilder<bool>(
-              valueListenable: store.purchaseInProgress,
-              builder: (_, busy, _) => SizedBox(
-                width: double.infinity,
-                child: BrassButton(
-                  label: busy
-                      ? 'CONTACTING THE STORE\u2026'
-                      : 'UNLOCK PRO \u00b7 ${store.proProduct!.price}',
-                  onTap: busy ? () {} : store.buyPro,
-                ),
-              ),
-            ),
         ],
       ),
     );
