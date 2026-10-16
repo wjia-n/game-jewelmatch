@@ -3,6 +3,7 @@ import '../theme/atelier.dart';
 import '../state/settings.dart';
 import '../audio/sound_engine.dart';
 import 'widgets.dart';
+import '../transfer/transfer_ui.dart';
 
 /// Settings — Stitch screen 4: walnut panel, brass plaque title + back,
 /// brass toggles (Music, SFX), brass-inlaid volume sliders, red-velvet
@@ -35,6 +36,7 @@ class SettingsScreen extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+              TransferSaveTile(gameSlug: 'jewelmatch'),
                   Row(
                     children: [
                       BrassIconButton(
