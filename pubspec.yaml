@@ -13,6 +13,7 @@ dependencies:
   audioplayers: ^6.8.1
   share_plus: ^13.3.1
   shared_preferences: ^2.5.6
+  cross_file: '>=0.3.0 <1.0.0'
   cupertino_icons: ^1.0.8
   in_app_purchase: ^3.2.1
   qr_flutter: '>=4.1.0 <5.0.0'
