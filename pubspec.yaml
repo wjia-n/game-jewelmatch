@@ -2,8 +2,7 @@ name: jewelmatch
 description: Jewel Match by Wajiha - a vintage jeweler's atelier match-3.
 publish_to: 'none'
 
-version: 1.1.0+3
-
+version: 1.1.0+4
 environment:
   sdk: ^3.13.5
 
